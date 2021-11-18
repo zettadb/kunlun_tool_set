@@ -1,0 +1,14 @@
+title = "cnf template"
+
+[restore]
+ColdBackupFilePath = ""
+BinlogBackupFilePath = "/"
+DefaultFile = ""
+GlobalConsistentEnable = false
+RestoreTime = ""
+
+[backup]
+MysqlEtcFilePath=""
+StorageType = "hdfs"
+ClusterName = "clust1"
+

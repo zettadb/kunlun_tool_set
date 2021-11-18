@@ -1,0 +1,3 @@
+cmd/restore/template.toml
+.idea/*
+tmp/*
