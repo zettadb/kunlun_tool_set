@@ -164,10 +164,16 @@ func (dx *DoRestoreColdbackType) doXtrabackupRestore(xtrabackupbaseDir string) e
 	//before Doing this, we need to confirm that the dest instance `datadir` is
 	//empty, if not ,we will clean it.
 	datadir := dx.Param.MysqlParam.Parameters["datadir"]
-	_ = os.RemoveAll(datadir)
-	_ = os.Mkdir(datadir, 0755)
+	err := os.RemoveAll(datadir)
+	if err != nil {
+		logger.Error("%s", err.Error())
+	}
+	err = os.Mkdir(datadir, 0755)
+	if err != nil {
+		logger.Error("%s", err.Error())
+	}
 	sh := commonUtil.NewShellRunner("xtrabackup", args)
-	err := sh.Run()
+	err = sh.Run()
 	if err != nil {
 		return err
 	}
