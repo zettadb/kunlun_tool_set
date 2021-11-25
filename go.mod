@@ -5,8 +5,10 @@ go 1.17
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/go-sql-driver/mysql v1.6.0
+	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/pkg/sftp v1.13.4
 	github.com/rfyiamcool/go-shell v1.0.0
+	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
 )
 
@@ -16,6 +18,7 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/jessevdk/go-flags v1.5.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
+	github.com/lestrrat-go/strftime v1.0.5 // indirect
 	github.com/lib/pq v1.10.3 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/mitchellh/mapstructure v1.4.2 // indirect

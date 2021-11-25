@@ -13,6 +13,7 @@ import (
 	"time"
 	"zetta_util/util/commonUtil"
 	"zetta_util/util/configParse"
+	"zetta_util/util/logger"
 )
 
 var XtrabackupGtidPos string
@@ -40,27 +41,33 @@ func (dx *DoRestoreColdbackType) ApplyColdBack() error {
 	//var retval bool
 	err = dx.preCheckInstance()
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	var xtrabackupBaseDir string
 	err, xtrabackupBaseDir = dx.extractColdBackup()
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	err = dx.parseXtrabackupGtidInfo()
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	err = dx.doXtrabackupPrepare(xtrabackupBaseDir)
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	err = dx.doXtrabackupRestore(xtrabackupBaseDir)
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	err = dx.postOpsAndCheck()
 	if err != nil {
+		logger.Debug("%s", err.Error())
 		return err
 	}
 	return nil

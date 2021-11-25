@@ -5,11 +5,12 @@ import (
 	"os"
 	"time"
 	"zetta_util/util/configParse"
+	"zetta_util/util/logger"
 	"zetta_util/util/restoreUtil"
 )
 
 func main() {
-
+	logger.InitLogger()
 	err := configParse.ParseArgRestore()
 	if err != nil {
 		fmt.Println(err.Error())
