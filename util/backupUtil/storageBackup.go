@@ -3,8 +3,9 @@ package backupUtil
 import (
 	"fmt"
 	"path/filepath"
-	"zetta_util/util/commonUtil"
 	"zetta_util/util/configParse"
+	"zetta_util/util/logger"
+	"zetta_util/util/shellRunner"
 )
 
 type DoMysqlBackupType struct {
@@ -40,22 +41,25 @@ func (d *DoMysqlBackupType) ColdBackup(arguments *configParse.BackupUtilArgument
 		"--no-server-version-check",
 		fmt.Sprintf("--backup --target-dir=%s/xtrabackup_base --user=root --password=root > %s/xtrabackup.log 2>&1 ",
 			configParse.BackupBaseDir, configParse.BackupBaseDir)}
-	sh := commonUtil.NewShellRunner(cmd, cmdArgs)
+	sh := shellRunner.NewShellRunner(cmd, cmdArgs)
 	err = sh.Run()
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return err
 	}
+	logger.Log.Debug(fmt.Sprintf("run xtrabackup successfully, cmd: %s", sh.Sh.Bash))
 
 	cmd1 := fmt.Sprintf("cd %s;tar czf coldback.tgz xtrabackup_base", configParse.BackupBaseDir)
-	sh1 := commonUtil.NewShellRunner(cmd1, make([]string, 0))
+	sh1 := shellRunner.NewShellRunner(cmd1, make([]string, 0))
 	err = sh1.Run()
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return err
 	}
 	coldTarball := fmt.Sprintf("%s/coldback.tgz", configParse.BackupBaseDir)
 	abspath, _ := filepath.Abs(coldTarball)
+	logger.Log.Debug(fmt.Sprintf("backup successfully and finished, file path is %s", abspath))
 	fmt.Println(abspath)
-
 	return nil
 
 }

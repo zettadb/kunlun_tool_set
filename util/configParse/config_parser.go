@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"zetta_util/util/logger"
+	"zetta_util/util/shellRunner"
 )
 
 var Banner string = `
@@ -128,7 +130,7 @@ NAME
 
 SYNOPSIS
 	backup -config=file.conf
-	backup -clustername=cname -etcfile=mysql-etc-file -storagetype=hdfs
+	backup -port=${mysql_listen_port} [-clustername=cname -etcfile=mysql-etc-file -storagetype=hdfs]
 
 DESCRIPTION
 	This is the tool to backup the kunlun cluster storage instance (use xtrabackup in default).
@@ -151,9 +153,24 @@ OVERVIEW
 
 }
 
+func getEtcFilePathByPort(port string) (string, error) {
+	cmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe | awk -F '--defaults-file=' '{print $2}' | awk -F ' ' '{print $1}'", port)
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
+	err := sh.Run()
+	if err != nil {
+		logger.Log.Error(err.Error())
+		return "", err
+	}
+	logger.Log.Debug(sh.Sh.Bash)
+	logger.Log.Debug(fmt.Sprintf("%s", sh.OutPut()))
+	return sh.Stdout(), nil
+
+}
+
 func ParseArgBackup() error {
 
 	configFile := flag.String("config", "", "config file, toml")
+	port := flag.String("port", "", "the port of mysql which to be backuped")
 	etcFile := flag.String("etcfile", "", "path to the etc file of the mysql instance to be backuped")
 	storagetype := flag.String("storagetype", "hdfs", "specify the coldback storage type: hdfs ..")
 	clustername := flag.String("clustername", "", "name of the cluster to be backuped")
@@ -163,6 +180,16 @@ func ParseArgBackup() error {
 		PrintBackupIntro()
 		flag.PrintDefaults()
 		return fmt.Errorf("arg parse error")
+	}
+	if len(*port) != 0 {
+		etcpath, err := getEtcFilePathByPort(*port)
+		if err != nil {
+			logger.Log.Error(err.Error())
+			if len(*etcFile) == 0 {
+				return err
+			}
+		}
+		*etcFile = etcpath
 	}
 
 	if len(*configFile) != 0 {
@@ -214,6 +241,7 @@ func ParseArgRestore() error {
 	optPt := new(MysqlOptionFile)
 
 	configFile := flag.String("config", "", "config file, toml")
+	port := flag.String("port", "", "the port of mysql which to be restored")
 	coldBackPath := flag.String("backupfile-xtrabackup", "", "path to xtrabackup coldback file")
 	binlogBackupPath := flag.String("backupfile-binlog", "", "path to binlog backup")
 	etcFile := flag.String("etcfile-new-mysql", "", "path to the etc file of the dest mysql instance")
@@ -228,6 +256,16 @@ func ParseArgRestore() error {
 		PrintRestoreIntro()
 		flag.PrintDefaults()
 		return fmt.Errorf("arg parse error")
+	}
+	if len(*port) != 0 {
+		etcpath, err := getEtcFilePathByPort(*port)
+		if err != nil {
+			logger.Log.Error(err.Error())
+			if len(*etcFile) == 0 {
+				return err
+			}
+		}
+		*etcFile = etcpath
 	}
 
 	if len(*configFile) != 0 {

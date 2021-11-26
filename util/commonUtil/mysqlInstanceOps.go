@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"zetta_util/util/configParse"
+	"zetta_util/util/shellRunner"
 )
 
 type MysqlInstanceOps struct {
@@ -34,7 +35,7 @@ func (m *MysqlInstanceOps) IsAlive() error {
 		return err
 	}
 	cmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep ", port)
-	sh := NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	if err != nil {
 		return err
@@ -57,7 +58,7 @@ func (m *MysqlInstanceOps) StartMysqld() error {
 		return err
 	}
 	cmd := fmt.Sprintf("cd %s;./startmysql.sh %s", m.DbaToolPath, port)
-	sh := NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -74,7 +75,7 @@ func (m *MysqlInstanceOps) ShutDownByKill() (bool, error) {
 		return false, err
 	}
 	cmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe |grep mysqld | grep socket| awk -F' ' '{printf $2 \" \" $3}' | xargs kill -9 ", port)
-	sh := NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	if err != nil {
 		return false, fmt.Errorf("%s", sh.OutPut())
@@ -88,7 +89,7 @@ func (m *MysqlInstanceOps) FetchWorkingDir() error {
 		return err
 	}
 	var cmd = fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe| awk -F'--defaults-file' '{printf $1}'| awk -F' ' '{print $NF}'", port)
-	sh := NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	output := sh.Stdout()
 	if err != nil {

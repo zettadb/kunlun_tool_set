@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	logger.InitLogger()
+	logger.Log.Debug(fmt.Sprintf("start restore"))
 	err := configParse.ParseArgRestore()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -18,12 +18,11 @@ func main() {
 	}
 	restoreColdback := restoreUtil.NewDoRestoreColdbackType()
 	err = restoreColdback.ApplyColdBack()
-	//_ = restoreUtil.NewDoRestoreColdbackType()
-	//restoreUtil.XtrabackupGtidPos = "3ea32e42-45dd-11ec-be28-7c8ae18d3c61:174"
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(-1)
 	}
+
 	fmt.Println("restore xtrabackup successfully")
 
 	time.Sleep(time.Second * 2)

@@ -14,6 +14,7 @@ import (
 	"zetta_util/util/commonUtil"
 	"zetta_util/util/configParse"
 	"zetta_util/util/logger"
+	"zetta_util/util/shellRunner"
 )
 
 var XtrabackupGtidPos string
@@ -41,33 +42,33 @@ func (dx *DoRestoreColdbackType) ApplyColdBack() error {
 	//var retval bool
 	err = dx.preCheckInstance()
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	var xtrabackupBaseDir string
 	err, xtrabackupBaseDir = dx.extractColdBackup()
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	err = dx.parseXtrabackupGtidInfo()
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	err = dx.doXtrabackupPrepare(xtrabackupBaseDir)
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	err = dx.doXtrabackupRestore(xtrabackupBaseDir)
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	err = dx.postOpsAndCheck()
 	if err != nil {
-		logger.Debug("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 		return err
 	}
 	return nil
@@ -83,12 +84,9 @@ func (dx *DoRestoreColdbackType) preCheckInstance() error {
 	//confirm the instance is alive
 	err := dx.Opts.IsAlive()
 	if err != nil {
-		return fmt.Errorf(
-			"error info: %s, mysqld is not alive through `ps` by %s",
-			err.Error(),
-			dx.Param.MysqlParam.Parameters["port"])
+		logger.Log.Error(err.Error())
+		return err
 	}
-
 	//shut down the dest MySQL instance
 	retval, err := dx.Opts.ShutDownByKill()
 	if retval == false {
@@ -101,7 +99,7 @@ func (dx *DoRestoreColdbackType) extractColdBackup() (error, string) {
 	_ = os.MkdirAll(configParse.RestoreBaseDir, 0777)
 	cmd := fmt.Sprintf("tar xzf %s -C %s", dx.Param.ColdBackupFilePath, configParse.RestoreBaseDir)
 	//fmt.Println(cmd)
-	sh := commonUtil.NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	dir := fmt.Sprintf("%s/xtrabackup_base", configParse.RestoreBaseDir)
 	if err != nil {
@@ -112,7 +110,7 @@ func (dx *DoRestoreColdbackType) extractColdBackup() (error, string) {
 
 func (dx *DoRestoreColdbackType) parseXtrabackupGtidInfo() error {
 	cmd := fmt.Sprintf("cat %s/xtrabackup_base/xtrabackup_binlog_info | cut -f 3", configParse.RestoreBaseDir)
-	sh := commonUtil.NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	if err != nil {
 		return err
@@ -146,7 +144,7 @@ func (dx *DoRestoreColdbackType) doXtrabackupPrepare(xtrabackupbaseDir string) e
 		fmt.Sprintf("--target-dir=%s", xtrabackupbaseDir),
 		"--core-file",
 	}
-	sh := commonUtil.NewShellRunner("xtrabackup", args)
+	sh := shellRunner.NewShellRunner("xtrabackup", args)
 	err := sh.Run()
 	if err != nil {
 		return err
@@ -164,15 +162,16 @@ func (dx *DoRestoreColdbackType) doXtrabackupRestore(xtrabackupbaseDir string) e
 	//before Doing this, we need to confirm that the dest instance `datadir` is
 	//empty, if not ,we will clean it.
 	datadir := dx.Param.MysqlParam.Parameters["datadir"]
+	logger.Log.Debug(fmt.Sprintf("will remove dir: %s", datadir))
 	err := os.RemoveAll(datadir)
 	if err != nil {
-		logger.Error("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 	}
-	err = os.Mkdir(datadir, 0755)
+	err = os.MkdirAll(datadir, 0755)
 	if err != nil {
-		logger.Error("%s", err.Error())
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 	}
-	sh := commonUtil.NewShellRunner("xtrabackup", args)
+	sh := shellRunner.NewShellRunner("xtrabackup", args)
 	err = sh.Run()
 	if err != nil {
 		return err
@@ -443,7 +442,7 @@ func (d *DoFastApplyBinlogType) ExtractBinlogBackupToRelayPath() error {
 
 	//Untar the binlog backup file to the relay path
 	cmd := fmt.Sprintf("tar xzf %s -C %s", d.Param.BinlogBackupFilePath, relayPath)
-	sh := commonUtil.NewShellRunner(cmd, make([]string, 0))
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	if err != nil {
 		return err
@@ -552,7 +551,7 @@ func (d *DoFastApplyBinlogType) TruncateFileByStoptime() error {
 		fmt.Sprintf("--binlog-index-file=%s", d.RelayLogIndexName),
 		fmt.Sprintf("--stop-datetime='%s'", d.StopDatetime),
 		fmt.Sprint("--truncate-file-by-stoptime")}
-	sh := commonUtil.NewShellRunner(cmdname, args)
+	sh := shellRunner.NewShellRunner(cmdname, args)
 	err := sh.Run()
 	if err != nil {
 		return err
@@ -572,7 +571,7 @@ func (d *DoFastApplyBinlogType) GetStartFilePosInfoByGtid() (*FilePosInfo, error
 	args := []string{
 		fmt.Sprintf("--binlog-index-file=%s", d.RelayLogIndexName),
 		fmt.Sprintf("--gtid-to-filepos=%s", d.StartGtid)}
-	sh := commonUtil.NewShellRunner(CmdName, args)
+	sh := shellRunner.NewShellRunner(CmdName, args)
 	err := sh.Run()
 	if err != nil {
 		return nil, err

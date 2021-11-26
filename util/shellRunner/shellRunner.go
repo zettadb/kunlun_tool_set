@@ -1,8 +1,10 @@
-package commonUtil
+package shellRunner
 
 import (
 	"fmt"
 	"github.com/rfyiamcool/go-shell"
+	"strings"
+	"zetta_util/util/logger"
 )
 
 type ShellRunner struct {
@@ -18,8 +20,6 @@ func DoCmdTest(cmd string) {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	//fmt.Println(sh.Stdout())
-	//fmt.Println(sh.Stderr())
 	fmt.Println(sh.OutPut())
 
 }
@@ -49,19 +49,38 @@ func (s *ShellRunner) Run() error {
 	err := s.Sh.Run()
 	s.retStatus = s.Sh.Status
 	if err != nil {
-		fmt.Printf("running %s \nerr occour: %s", s.Sh.Bash, s.OutPut())
-		return err
+		logger.Log.Error(fmt.Sprintf("exec cmd: %s output: %s", s.Sh.Bash, s.OutPut()))
+		return fmt.Errorf("exec cmd: %s output: %s", s.Sh.Bash, s.OutPut())
 	}
 	return nil
 }
 
 func (s *ShellRunner) OutPut() string {
-	return fmt.Sprintf("exit code: %d, stdout: %s, stderr: %s",
-		s.Sh.Status.ExitCode, s.Sh.Status.Stdout, s.Sh.Status.Stderr)
+	var out, err string
+	if len(s.Sh.Status.Stdout) == 0 {
+		out = "nil "
+	} else {
+		out = s.Sh.Status.Stdout
+	}
+
+	if len(s.Sh.Status.Stderr) == 0 {
+		err = "nil "
+	} else {
+		err = s.Sh.Status.Stderr
+	}
+
+	for strings.HasSuffix(out, "\n") {
+		out = strings.TrimSuffix(out, "\n")
+	}
+	return fmt.Sprintf("stdout:%s stderr:%s", out, err)
 }
 
 func (s *ShellRunner) Stdout() string {
-	return s.retStatus.Stdout
+	out := s.retStatus.Stdout
+	for strings.HasSuffix(out, "\n") {
+		out = strings.TrimSuffix(out, "\n")
+	}
+	return out
 }
 
 func (s *ShellRunner) Stderr() string {

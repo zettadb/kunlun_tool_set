@@ -1,16 +1,20 @@
 package logger
 
 import (
+	"bytes"
+	"fmt"
+	"github.com/antonfisher/nested-logrus-formatter"
 	"github.com/lestrrat-go/file-rotatelogs"
 	"github.com/sirupsen/logrus"
 	"os"
 	_ "os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
 var (
-	Logger        *logrus.Logger
+	Log           *logrus.Logger
 	prefixLogName string = ""
 	Directory     string = ""
 	MaxHour       int    = 7 * 24
@@ -18,9 +22,24 @@ var (
 	RotationSize  int64  = 500 * 1024 * 1024 // 500M
 )
 
-func InitLogger() {
+func CallerFormat(entity *runtime.Frame) string {
+	// output buffer
+	b := &bytes.Buffer{}
+	_, filename := filepath.Split(entity.File)
+	_, function := filepath.Split(entity.Function)
+	fmt.Fprintf(
+		b,
+		"  [caller - %s:%d %s -]",
+		filename,
+		entity.Line,
+		function,
+	)
+	return b.String()
+}
 
-	Logger = logrus.New()
+func init() {
+
+	Log = logrus.New()
 
 	if len(prefixLogName) == 0 {
 		prefixLogName = "sys_" + filepath.Base(os.Args[0])
@@ -34,26 +53,16 @@ func InitLogger() {
 		rotatelogs.WithMaxAge(time.Duration(MaxHour)*time.Hour),
 		rotatelogs.WithRotationTime(time.Duration(RotationHour)*time.Hour),
 		rotatelogs.WithRotationSize(RotationSize))
-	Logger.SetOutput(ioptr)
-	Logger.SetLevel(logrus.TraceLevel)
-	Logger.SetFormatter(&logrus.TextFormatter{
-		DisableColors:   true,
-		TimestampFormat: "2021-01-02 15:03:04"})
-
-}
-
-func Debug(format string, args ...interface{}) {
-	Logger.Debugf(format, args)
-}
-func Error(format string, args ...interface{}) {
-	Logger.Errorf(format, args)
-}
-func Fatal(format string, args ...interface{}) {
-	Logger.Fatalf(format, args)
-}
-func Info(format string, args ...interface{}) {
-	Logger.Infof(format, args)
-}
-func Warn(format string, args ...interface{}) {
-	Logger.Warnf(format, args)
+	Log.SetOutput(ioptr)
+	Log.SetLevel(logrus.TraceLevel)
+	Log.SetReportCaller(true)
+	Log.SetFormatter(&formatter.Formatter{
+		HideKeys:              true,
+		NoColors:              true,
+		CallerFirst:           false,
+		TrimMessages:          true,
+		TimestampFormat:       "2006-01-02 15:04:05.000",
+		CustomCallerFormatter: CallerFormat,
+	},
+	)
 }
