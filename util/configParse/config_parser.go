@@ -1,3 +1,10 @@
+/*
+   Copyright (c) 2019-2021 ZettaDB inc. All rights reserved.
+
+   This source code is licensed under Apache 2.0 License,
+   combined with Common Clause Condition 1.0, as detailed in the NOTICE file.
+*/
+
 package configParse
 
 import (
@@ -31,6 +38,7 @@ var RestoreUtilArgs RestoreUtilArguments
 var BackupUtilArgs BackupUtilArguments
 var RestoreBaseDir string
 var BackupBaseDir string
+var HdfsBaseDir = "/kunlun/backup"
 
 type tomlConfig struct {
 	Title   string
@@ -41,16 +49,20 @@ type BackupUtilArguments struct {
 	MysqlEtcFilePath string
 	StorageType      string
 	ClusterName      string
+	ShardName        string
+	Port             string
+	MysqlPara        *MysqlOptionFile
 }
 
 type RestoreUtilArguments struct {
-	ColdBackupFilePath     string
-	BinlogBackupFilePath   string
-	DefaultFile            string
 	GlobalConsistentEnable bool
 	RestoreTime            string
 	OrigClusterName        string
+	OrigShardName          string
 	MetaClusterConnStr     string
+	TempWorkDir            string
+	ColdBackupFilePath     string
+	BinlogBackupFilePath   string
 	MysqlParam             *MysqlOptionFile
 }
 
@@ -64,14 +76,14 @@ func parseTomlCnf(path string) error {
 		Path:       "",
 		Parameters: make(map[string]string, 0),
 		Inited:     false}
-	optionFile.Path = TomlCnf.Restore.DefaultFile
+	optionFile.Path = TomlCnf.Restore.MysqlParam.Path
 	TomlCnf.Restore.MysqlParam = optionFile
 	RestoreUtilArgs = TomlCnf.Restore
 	err = RestoreUtilArgs.IsValid()
 	if err != nil {
 		return err
 	}
-	initRestoreBaseDir(TomlCnf.Restore.OrigClusterName)
+	initRestoreBaseDir(TomlCnf.Restore.OrigClusterName, "./tmpdata")
 	initBackupBaseDir(TomlCnf.Backup.ClusterName)
 	err = optionFile.Parse()
 	if err != nil {
@@ -102,13 +114,14 @@ func isFlagParsed(name string) bool {
 	return found
 }
 
-func initRestoreBaseDir(origClusterName string) {
+func initRestoreBaseDir(origClusterName string, tmpdir string) {
 	Systimestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	if len(origClusterName) != 0 {
-		RestoreBaseDir = fmt.Sprintf("data/restore-%s-%s", origClusterName, Systimestamp)
+		RestoreBaseDir = fmt.Sprintf("%s/restore-%s-%s", tmpdir, origClusterName, Systimestamp)
 	} else {
-		RestoreBaseDir = fmt.Sprintf("data/restore-anonymousCluster-%s", Systimestamp)
+		RestoreBaseDir = fmt.Sprintf("%s/restore-anonymousCluster-%s", tmpdir, Systimestamp)
 	}
+	os.MkdirAll(RestoreBaseDir, 0755)
 }
 
 //todo invoke initbackupbasedir
@@ -154,7 +167,7 @@ OVERVIEW
 }
 
 func getEtcFilePathByPort(port string) (string, error) {
-	cmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe | awk -F '--defaults-file=' '{print $2}' | awk -F ' ' '{print $1}'", port)
+	cmd := fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe | awk -F '--defaults-file=' '{print $2}' | grep -v -e '^$'| awk -F ' ' '{print $1}'", port)
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	if err != nil {
@@ -174,6 +187,7 @@ func ParseArgBackup() error {
 	etcFile := flag.String("etcfile", "", "path to the etc file of the mysql instance to be backuped")
 	storagetype := flag.String("storagetype", "hdfs", "specify the coldback storage type: hdfs ..")
 	clustername := flag.String("clustername", "", "name of the cluster to be backuped")
+	shardname := flag.String("shardname", "", "name of the current shard")
 	flag.Parse()
 
 	if len(os.Args) < 2 {
@@ -202,6 +216,18 @@ func ParseArgBackup() error {
 	BackupUtilArgs.MysqlEtcFilePath = *etcFile
 	BackupUtilArgs.StorageType = *storagetype
 	BackupUtilArgs.ClusterName = *clustername
+	BackupUtilArgs.ShardName = *shardname
+	BackupUtilArgs.Port = *port
+
+	BackupUtilArgs.MysqlPara = new(MysqlOptionFile)
+	BackupUtilArgs.MysqlPara.Path = *etcFile
+	BackupUtilArgs.MysqlPara.Inited = false
+	BackupUtilArgs.MysqlPara.Parameters = make(map[string]string)
+	err := BackupUtilArgs.MysqlPara.Parse()
+	if err != nil {
+		return err
+	}
+
 	initBackupBaseDir(BackupUtilArgs.ClusterName)
 	return nil
 
@@ -238,16 +264,14 @@ OVERVIEW
 }
 
 func ParseArgRestore() error {
-	optPt := new(MysqlOptionFile)
 
 	configFile := flag.String("config", "", "config file, toml")
 	port := flag.String("port", "", "the port of mysql which to be restored")
-	coldBackPath := flag.String("backupfile-xtrabackup", "", "path to xtrabackup coldback file")
-	binlogBackupPath := flag.String("backupfile-binlog", "", "path to binlog backup")
-	etcFile := flag.String("etcfile-new-mysql", "", "path to the etc file of the dest mysql instance")
+	tmpDir := flag.String("tmpdir", "./tmpdata", "temporary work path to store the coldback file.")
 	consistent := flag.Bool("enable-globalconsistent", false, "whether restore the new mysql under global consistent restrict")
 	restoretime := flag.String("restoretime", "", "time point the new mysql restore to")
 	origClusterName := flag.String("origclustername", "", "source cluster name to be restored or backuped")
+	origShardName := flag.String("origshardname", "", "source shard name to be restored")
 	metaClusterConnStr := flag.String("metaclusterconnstr", "", "meta cluster connection string")
 
 	flag.Parse()
@@ -257,16 +281,21 @@ func ParseArgRestore() error {
 		flag.PrintDefaults()
 		return fmt.Errorf("arg parse error")
 	}
+	var etcFile string
+	var err error
 	if len(*port) != 0 {
-		etcpath, err := getEtcFilePathByPort(*port)
+		etcFile, err = getEtcFilePathByPort(*port)
 		if err != nil {
 			logger.Log.Error(err.Error())
-			if len(*etcFile) == 0 {
+			if len(etcFile) == 0 {
 				return err
 			}
 		}
-		*etcFile = etcpath
 	}
+	optPt := new(MysqlOptionFile)
+	optPt.Inited = false
+	optPt.Parameters = make(map[string]string, 0)
+	optPt.Path = etcFile
 
 	if len(*configFile) != 0 {
 		err := parseTomlCnf(*configFile)
@@ -275,20 +304,20 @@ func ParseArgRestore() error {
 		}
 		return nil
 	}
-	initRestoreBaseDir(*origClusterName)
 
 	optPt.Inited = false
 	optPt.Parameters = make(map[string]string, 0)
-	optPt.Path = *etcFile
+	optPt.Path = etcFile
 	RestoreUtilArgs.MysqlParam = optPt
-	RestoreUtilArgs.ColdBackupFilePath = *coldBackPath
-	RestoreUtilArgs.BinlogBackupFilePath = *binlogBackupPath
+	RestoreUtilArgs.TempWorkDir = *tmpDir
+	RestoreUtilArgs.OrigShardName = *origShardName
 	RestoreUtilArgs.GlobalConsistentEnable = *consistent
 	RestoreUtilArgs.RestoreTime = *restoretime
 	RestoreUtilArgs.OrigClusterName = *origClusterName
 	RestoreUtilArgs.MetaClusterConnStr = *metaClusterConnStr
+	initRestoreBaseDir(*origClusterName, *tmpDir)
 
-	err := RestoreUtilArgs.IsValid()
+	err = RestoreUtilArgs.IsValid()
 	if err != nil {
 		return err
 	}

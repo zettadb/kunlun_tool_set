@@ -1,9 +1,18 @@
+/*
+   Copyright (c) 2019-2021 ZettaDB inc. All rights reserved.
+
+   This source code is licensed under Apache 2.0 License,
+   combined with Common Clause Condition 1.0, as detailed in the NOTICE file.
+*/
+
 package restoreUtil
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/jmoiron/sqlx"
+	"github.com/metakeule/fmtdate"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -95,12 +104,103 @@ func (dx *DoRestoreColdbackType) preCheckInstance() error {
 	return nil
 }
 
+func (dx *DoRestoreColdbackType) DownloadColdXtraFileByTime(storePath *string, remotePath string, timePoint string) error {
+
+	cmd := fmt.Sprintf("hadoop fs -ls %s", remotePath)
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
+	err := sh.Run()
+	if err != nil {
+		return err
+	}
+	lsOutPut := sh.Stdout()
+	timePathMap := make(map[int64]string, 0)
+	for _, lines := range strings.Split(lsOutPut, "\n") {
+		if strings.HasSuffix(lines, ".tgz") {
+			tokenVec := strings.Split(lines, "_")
+			vecSize := len(tokenVec)
+			timeV := tokenVec[vecSize-3 : vecSize-1]
+
+			year := strings.TrimPrefix(timeV[0], "D")
+			times := strings.TrimPrefix(timeV[1], "T")
+			unixTime, err := fmtdate.Parse("YYYY#MM#DD_hh#mm#ss",
+				fmt.Sprintf("%s_%s", year, times))
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+
+			lineV := strings.Split(lines, " ")
+			line := lineV[len(lineV)-1:][0]
+			timePathMap[unixTime.Unix()] = line
+		}
+	}
+	var restoreTimeUnix int64
+	restoreTime, err := fmtdate.Parse("YYYY-MM-DD hh:mm:ss", timePoint)
+	if err != nil {
+		return err
+	}
+	restoreTimeUnix = restoreTime.Unix()
+	sortedKey := make([]int64, 0)
+	for key, _ := range timePathMap {
+		sortedKey = append(sortedKey, key)
+	}
+	//do sort
+	sort.Slice(sortedKey, func(i, j int) bool {
+		return sortedKey[i] <= sortedKey[j]
+	})
+
+	var index int = 0
+	var key int64 = 0
+	for index, key = range sortedKey {
+		if key >= restoreTimeUnix {
+			break
+		}
+	}
+	if index > 0 {
+		index = index - 1
+	}
+
+	key = sortedKey[index]
+	if restoreTimeUnix-key >= 86400 {
+		return fmt.Errorf("latest cold back file is %s, some cold back may lost", timePathMap[key])
+	}
+	xtrabacupFullPathLocal := fmt.Sprintf("%s/xtraColdFile.tgz", *storePath)
+	dx.Param.ColdBackupFilePath = xtrabacupFullPathLocal
+
+	cmd = fmt.Sprintf("hadoop fs -get %s %s", timePathMap[key], xtrabacupFullPathLocal)
+	fmt.Println(cmd)
+	sh1 := shellRunner.NewShellRunner(cmd, make([]string, 0))
+	err = sh1.Run()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (dx *DoRestoreColdbackType) fetchColdBackTarBall() error {
+	path := configParse.RestoreBaseDir
+	clusterName := dx.Param.OrigClusterName
+	shardName := dx.Param.OrigShardName
+
+	hdfsPath := fmt.Sprintf("%s/xtrabackup/%s/%s", configParse.HdfsBaseDir, clusterName, shardName)
+
+	err := dx.DownloadColdXtraFileByTime(&path, hdfsPath, dx.Param.RestoreTime)
+	if err != nil {
+		return err
+	}
+	return nil
+
+}
+
 func (dx *DoRestoreColdbackType) extractColdBackup() (error, string) {
+	err := dx.fetchColdBackTarBall()
+	if err != nil {
+		return err, ""
+	}
 	_ = os.MkdirAll(configParse.RestoreBaseDir, 0777)
 	cmd := fmt.Sprintf("tar xzf %s -C %s", dx.Param.ColdBackupFilePath, configParse.RestoreBaseDir)
 	//fmt.Println(cmd)
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
-	err := sh.Run()
+	err = sh.Run()
 	dir := fmt.Sprintf("%s/xtrabackup_base", configParse.RestoreBaseDir)
 	if err != nil {
 		return err, dir
@@ -153,23 +253,41 @@ func (dx *DoRestoreColdbackType) doXtrabackupPrepare(xtrabackupbaseDir string) e
 }
 
 func (dx *DoRestoreColdbackType) doXtrabackupRestore(xtrabackupbaseDir string) error {
+	//before Doing this, we need to confirm that the dest instance `datadir` is
+	//empty, if not ,we will clean it.
+	datadir := dx.Param.MysqlParam.Parameters["datadir"]
+	binlogdir := filepath.Dir(dx.Param.MysqlParam.Parameters["log-bin"])
+	relaydir := filepath.Dir(dx.Param.MysqlParam.Parameters["relay-log"])
+	err := os.RemoveAll(datadir)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
+	err = os.RemoveAll(binlogdir)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
+	err = os.RemoveAll(relaydir)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
+
+	err = os.MkdirAll(datadir, 0755)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
+	err = os.MkdirAll(binlogdir, 0755)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
+	err = os.MkdirAll(relaydir, 0755)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+	}
 	args := []string{
 		fmt.Sprintf("--defaults-file=%s", dx.Param.MysqlParam.Path),
 		"--copy-back",
 		fmt.Sprintf("--target-dir=%s", xtrabackupbaseDir),
 		"--core-file",
-	}
-	//before Doing this, we need to confirm that the dest instance `datadir` is
-	//empty, if not ,we will clean it.
-	datadir := dx.Param.MysqlParam.Parameters["datadir"]
-	logger.Log.Debug(fmt.Sprintf("will remove dir: %s", datadir))
-	err := os.RemoveAll(datadir)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
-	err = os.MkdirAll(datadir, 0755)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
 	}
 	sh := shellRunner.NewShellRunner("xtrabackup", args)
 	err = sh.Run()
@@ -230,6 +348,10 @@ func (d *DoFastApplyBinlogType) ApplyFastBinlogApply() error {
 			return err
 		}
 	}
+	err = d.fetchBinlogFileFromHdfs()
+	if err != nil {
+		return err
+	}
 	err = d.ExtractBinlogBackupToRelayPath()
 	if err != nil {
 		return err
@@ -279,10 +401,10 @@ func (d *DoFastApplyBinlogType) GenerateFakeReplicaChannel() error {
 		d.StartRelayName, d.StartRelayPos,
 	)
 
-	fmt.Println(doChangeMasterStmt)
+	logger.Log.Debug("Will do: %s", doChangeMasterStmt)
 
 	dbConn, err := configParse.NewMysqlConnectionBySockFile(d.Param.MysqlParam.Parameters["socket"], "root", "root")
-	defer func(dbConn *sql.DB) {
+	defer func(dbConn *sqlx.DB) {
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -308,7 +430,7 @@ func (d *DoFastApplyBinlogType) StartSlaveSqlThread() error {
 	doStartSqlThread = fmt.Sprintf("start slave sql_thread for channel 'fast_apply'")
 
 	dbConn, err := configParse.NewMysqlConnectionBySockFile(d.Param.MysqlParam.Parameters["socket"], "root", "root")
-	defer func(dbConn *sql.DB) {
+	defer func(dbConn *sqlx.DB) {
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -329,71 +451,75 @@ func (d *DoFastApplyBinlogType) StartSlaveSqlThread() error {
 }
 
 type SlaveStatusInfo struct {
-	Slave_IO_State                string
-	Master_Host                   string
-	Master_User                   string
-	Master_Port                   string
-	Connect_Retry                 string
-	Master_Log_File               string
-	Read_Master_Log_Pos           string
-	Relay_Log_File                string
-	Relay_Log_Pos                 string
-	Relay_Master_Log_File         string
-	Slave_IO_Running              string
-	Slave_SQL_Running             string
-	Replicate_Do_DB               string
-	Replicate_Ignore_DB           string
-	Replicate_Do_Table            string
-	Replicate_Ignore_Table        string
-	Replicate_Wild_Do_Table       string
-	Replicate_Wild_Ignore_Table   string
-	Last_Errno                    string
-	Last_Error                    string
-	Skip_Counter                  string
-	Exec_Master_Log_Pos           string
-	Relay_Log_Space               string
-	Until_Condition               string
-	Until_Log_File                string
-	Until_Log_Pos                 string
-	Master_SSL_Allowed            string
-	Master_SSL_CA_File            string
-	Master_SSL_CA_Path            string
-	Master_SSL_Cert               string
-	Master_SSL_Cipher             string
-	Master_SSL_Key                string
-	Seconds_Behind_Master         string
-	Master_SSL_Verify_Server_Cert string
-	Last_IO_Errno                 string
-	Last_IO_Error                 string
-	Last_SQL_Errno                string
-	Last_SQL_Error                string
-	Replicate_Ignore_Server_Ids   string
-	Master_Server_Id              string
-	Master_UUID                   string
-	Master_Info_File              string
-	SQL_Delay                     string
-	SQL_Remaining_Delay           string
-	Slave_SQL_Running_State       string
-	Master_Retry_Count            string
-	Master_Bind                   string
-	Last_IO_Error_Timestamp       string
-	Last_SQL_Error_Timestamp      string
-	Master_SSL_Crl                string
-	Master_SSL_Crlpath            string
-	Retrieved_Gtid_Set            string
-	Executed_Gtid_Set             string
-	Auto_Position                 string
-	Replicate_Rewrite_DB          string
-	Channel_Name                  string
-	Master_TLS_Version            string
-	Master_public_key_path        string
-	Get_master_public_key         string
-	Network_Namespace             string
+	Slave_IO_State                sql.NullString
+	Master_Host                   sql.NullString
+	Master_User                   sql.NullString
+	Master_Port                   sql.NullString
+	Connect_Retry                 sql.NullString
+	Master_Log_File               sql.NullString
+	Read_Master_Log_Pos           sql.NullString
+	Relay_Log_File                sql.NullString
+	Relay_Log_Pos                 sql.NullString
+	Relay_Master_Log_File         sql.NullString
+	Slave_IO_Running              sql.NullString
+	Slave_SQL_Running             sql.NullString
+	Replicate_Do_DB               sql.NullString
+	Replicate_Ignore_DB           sql.NullString
+	Replicate_Do_Table            sql.NullString
+	Replicate_Ignore_Table        sql.NullString
+	Replicate_Wild_Do_Table       sql.NullString
+	Replicate_Wild_Ignore_Table   sql.NullString
+	Last_Errno                    sql.NullString
+	Last_Error                    sql.NullString
+	Skip_Counter                  sql.NullString
+	Exec_Master_Log_Pos           sql.NullString
+	Relay_Log_Space               sql.NullString
+	Until_Condition               sql.NullString
+	Until_Log_File                sql.NullString
+	Until_Log_Pos                 sql.NullString
+	Master_SSL_Allowed            sql.NullString
+	Master_SSL_CA_File            sql.NullString
+	Master_SSL_CA_Path            sql.NullString
+	Master_SSL_Cert               sql.NullString
+	Master_SSL_Cipher             sql.NullString
+	Master_SSL_Key                sql.NullString
+	Seconds_Behind_Master         sql.NullString
+	Master_SSL_Verify_Server_Cert sql.NullString
+	Last_IO_Errno                 sql.NullString
+	Last_IO_Error                 sql.NullString
+	Last_SQL_Errno                sql.NullString
+	Last_SQL_Error                sql.NullString
+	Replicate_Ignore_Server_Ids   sql.NullString
+	Master_Server_Id              sql.NullString
+	Master_UUID                   sql.NullString
+	Master_Info_File              sql.NullString
+	SQL_Delay                     sql.NullString
+	SQL_Remaining_Delay           sql.NullString
+	Slave_SQL_Running_State       sql.NullString
+	Master_Retry_Count            sql.NullString
+	Master_Bind                   sql.NullString
+	Last_IO_Error_Timestamp       sql.NullString
+	Last_SQL_Error_Timestamp      sql.NullString
+	Master_SSL_Crl                sql.NullString
+	Master_SSL_Crlpath            sql.NullString
+	Retrieved_Gtid_Set            sql.NullString
+	Executed_Gtid_Set             sql.NullString
+	Auto_Position                 sql.NullString
+	Replicate_Rewrite_DB          sql.NullString
+	Channel_Name                  sql.NullString
+	Master_TLS_Version            sql.NullString
+	Master_public_key_path        sql.NullString
+	Get_master_public_key         sql.NullString
+	Network_Namespace             sql.NullString
 }
 
 func (s *SlaveStatusInfo) Ok() bool {
 
-	return true
+	if s.Slave_SQL_Running_State.String == "Slave has read all relay log; waiting for more updates" &&
+		s.Slave_SQL_Running.String == "Yes" {
+		return true
+	}
+	return false
 }
 
 func (s *SlaveStatusInfo) Error() error {
@@ -403,13 +529,84 @@ func (s *SlaveStatusInfo) Error() error {
 func (d *DoFastApplyBinlogType) GetSlaveStatusInfoInterval(ch chan SlaveStatusInfo, interval int) {
 
 	showStmt := "show slave status for channel 'fast_apply'"
+
 	dbConn, _ := configParse.NewMysqlConnectionBySockFile(d.Param.MysqlParam.Parameters["socket"], "root", "root")
 	if dbConn == nil || dbConn.Ping() != nil {
 		return
 	}
 	for {
-		var slaveInfo SlaveStatusInfo
-		_ = dbConn.QueryRow(showStmt).Scan(&slaveInfo)
+		slaveInfo := SlaveStatusInfo{}
+		rows, err := dbConn.Queryx(showStmt)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+		for rows.Next() {
+			err := rows.Scan(
+				&slaveInfo.Slave_IO_State,
+				&slaveInfo.Master_Host,
+				&slaveInfo.Master_User,
+				&slaveInfo.Master_Port,
+				&slaveInfo.Connect_Retry,
+				&slaveInfo.Master_Log_File,
+				&slaveInfo.Read_Master_Log_Pos,
+				&slaveInfo.Relay_Log_File,
+				&slaveInfo.Relay_Log_Pos,
+				&slaveInfo.Relay_Master_Log_File,
+				&slaveInfo.Slave_IO_Running,
+				&slaveInfo.Slave_SQL_Running,
+				&slaveInfo.Replicate_Do_DB,
+				&slaveInfo.Replicate_Ignore_DB,
+				&slaveInfo.Replicate_Do_Table,
+				&slaveInfo.Replicate_Ignore_Table,
+				&slaveInfo.Replicate_Wild_Do_Table,
+				&slaveInfo.Replicate_Wild_Ignore_Table,
+				&slaveInfo.Last_Errno,
+				&slaveInfo.Last_Error,
+				&slaveInfo.Skip_Counter,
+				&slaveInfo.Exec_Master_Log_Pos,
+				&slaveInfo.Relay_Log_Space,
+				&slaveInfo.Until_Condition,
+				&slaveInfo.Until_Log_File,
+				&slaveInfo.Until_Log_Pos,
+				&slaveInfo.Master_SSL_Allowed,
+				&slaveInfo.Master_SSL_CA_File,
+				&slaveInfo.Master_SSL_CA_Path,
+				&slaveInfo.Master_SSL_Cert,
+				&slaveInfo.Master_SSL_Cipher,
+				&slaveInfo.Master_SSL_Key,
+				&slaveInfo.Seconds_Behind_Master,
+				&slaveInfo.Master_SSL_Verify_Server_Cert,
+				&slaveInfo.Last_IO_Errno,
+				&slaveInfo.Last_IO_Error,
+				&slaveInfo.Last_SQL_Errno,
+				&slaveInfo.Last_SQL_Error,
+				&slaveInfo.Replicate_Ignore_Server_Ids,
+				&slaveInfo.Master_Server_Id,
+				&slaveInfo.Master_UUID,
+				&slaveInfo.Master_Info_File,
+				&slaveInfo.SQL_Delay,
+				&slaveInfo.SQL_Remaining_Delay,
+				&slaveInfo.Slave_SQL_Running_State,
+				&slaveInfo.Master_Retry_Count,
+				&slaveInfo.Master_Bind,
+				&slaveInfo.Last_IO_Error_Timestamp,
+				&slaveInfo.Last_SQL_Error_Timestamp,
+				&slaveInfo.Master_SSL_Crl,
+				&slaveInfo.Master_SSL_Crlpath,
+				&slaveInfo.Retrieved_Gtid_Set,
+				&slaveInfo.Executed_Gtid_Set,
+				&slaveInfo.Auto_Position,
+				&slaveInfo.Replicate_Rewrite_DB,
+				&slaveInfo.Channel_Name,
+				&slaveInfo.Master_TLS_Version,
+				&slaveInfo.Master_public_key_path,
+				&slaveInfo.Get_master_public_key,
+				&slaveInfo.Network_Namespace,
+			)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		}
 		ch <- slaveInfo
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
@@ -434,6 +631,104 @@ func (d *DoFastApplyBinlogType) CheckSqlThreadState() error {
 	return nil
 }
 
+func (d *DoFastApplyBinlogType) fetchBinlogFileFromHdfs() error {
+
+	binlog_download_base := configParse.RestoreBaseDir + "/binlog_base"
+	os.MkdirAll(binlog_download_base, 0755)
+
+	restoreTime, err := fmtdate.Parse("YYYY-MM-DD hh:mm:ss", d.Param.RestoreTime)
+	if err != nil {
+		return err
+	}
+	year, month, day := restoreTime.Date()
+	date := fmt.Sprintf("D%04d#%02d#%02d", year, month, day)
+	hdfsPathPrefix := fmt.Sprintf("%s/binlog/%s/%s/%s",
+		configParse.HdfsBaseDir, d.Param.OrigClusterName, d.Param.OrigShardName, date)
+
+	cmd := fmt.Sprintf("hadoop fs -ls %s", hdfsPathPrefix)
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
+	err = sh.Run()
+	if err != nil {
+		return err
+	}
+	timePathMap := make(map[int64]string, 0)
+	splitVec := strings.Split(sh.Stdout(), "\n")
+	for _, line := range splitVec {
+		if strings.HasSuffix(line, ".lz4") {
+			tokenVec := strings.Split(line, "_")
+			vecSize := len(tokenVec)
+			timeV := tokenVec[vecSize-3 : vecSize-1]
+
+			year := strings.TrimPrefix(timeV[0], "D")
+			times := strings.TrimPrefix(timeV[1], "T")
+			unixTime, err := fmtdate.Parse("YYYY#MM#DD_hh#mm#ss",
+				fmt.Sprintf("%s_%s", year, times))
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+
+			lineV := strings.Split(line, " ")
+			line := lineV[len(lineV)-1:][0]
+			timePathMap[unixTime.Unix()] = line
+		}
+	}
+	sortedKey := make([]int64, 0)
+	for key, _ := range timePathMap {
+		sortedKey = append(sortedKey, key)
+	}
+	//do sort
+	sort.Slice(sortedKey, func(i, j int) bool {
+		return sortedKey[i] <= sortedKey[j]
+	})
+	var index int = 0
+	var key int64 = 0
+	restoreTimeUnix := restoreTime.Unix()
+	for index, key = range sortedKey {
+		if key > restoreTimeUnix {
+			break
+		}
+	}
+
+	for it := 0; it <= index; it = it + 1 {
+		key_ := sortedKey[it]
+		binlogPath := timePathMap[key_]
+		binlogOrigName := d.fetchBinlogNameFromHdfsPath(binlogPath)
+		// download file to the binlog_base
+		cmd := fmt.Sprintf("hadoop fs -get %s %s", binlogPath,
+			fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName))
+		sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
+		err = sh.Run()
+		if err != nil {
+			return err
+		}
+
+		//decode lz4 file
+		cmd = fmt.Sprintf("lz4 -f -d %s %s",
+			fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName),
+			fmt.Sprintf("%s/%s", binlog_download_base, binlogOrigName))
+		sh1 := shellRunner.NewShellRunner(cmd, make([]string, 0))
+		err = sh1.Run()
+		if err != nil {
+			return err
+		}
+		// remove *.lz4 file
+		os.RemoveAll(fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName))
+	}
+
+	d.Param.BinlogBackupFilePath = binlog_download_base
+
+	return nil
+}
+func (d *DoFastApplyBinlogType) fetchBinlogNameFromHdfsPath(path string) string {
+	tokenVec := strings.Split(path, "_")
+	for _, words := range tokenVec {
+		if strings.HasPrefix(words, "binlog.") {
+			return words
+		}
+	}
+	return ""
+}
+
 func (d *DoFastApplyBinlogType) ExtractBinlogBackupToRelayPath() error {
 	//Get the relay log path
 	para := d.Param.MysqlParam.Parameters["relay-log"]
@@ -441,7 +736,8 @@ func (d *DoFastApplyBinlogType) ExtractBinlogBackupToRelayPath() error {
 	_ = os.MkdirAll(relayPath, 0755)
 
 	//Untar the binlog backup file to the relay path
-	cmd := fmt.Sprintf("tar xzf %s -C %s", d.Param.BinlogBackupFilePath, relayPath)
+	//cmd := fmt.Sprintf("tar xzf %s -C %s", d.Param.BinlogBackupFilePath, relayPath)
+	cmd := fmt.Sprintf("cp -r %s %s", d.Param.BinlogBackupFilePath, relayPath)
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	if err != nil {

@@ -1,7 +1,16 @@
+/*
+   Copyright (c) 2019-2021 ZettaDB inc. All rights reserved.
+
+   This source code is licensed under Apache 2.0 License,
+   combined with Common Clause Condition 1.0, as detailed in the NOTICE file.
+*/
+
 package shellRunner
 
 import (
 	"fmt"
+	"github.com/elliotchance/orderedmap"
+	"github.com/metakeule/fmtdate"
 	"github.com/rfyiamcool/go-shell"
 	"strings"
 	"zetta_util/util/logger"
@@ -20,7 +29,21 @@ func DoCmdTest(cmd string) {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	fmt.Println(sh.OutPut())
+	//	fmt.Println(sh.Stdout())
+	lsOutPut := sh.Stdout()
+	timePathMap := orderedmap.NewOrderedMap()
+	for _, lines := range strings.Split(lsOutPut, "\n") {
+		if strings.HasSuffix(lines, ".tgz") {
+			tokenVec := strings.Split(lines, "_")
+			vecSize := len(tokenVec)
+			timeV := tokenVec[vecSize-3 : vecSize-1]
+			unixTime, _ := fmtdate.Parse("YYYY#MM#DD_hh#mm#ss",
+				fmt.Sprintf("%s_%s", timeV[0], timeV[1]))
+			lineV := strings.Split(lines, " ")
+			line := lineV[len(lineV)-1:]
+			timePathMap.Set(unixTime.Unix(), line)
+		}
+	}
 
 }
 

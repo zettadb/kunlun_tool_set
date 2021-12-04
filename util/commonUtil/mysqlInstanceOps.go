@@ -1,3 +1,10 @@
+/*
+   Copyright (c) 2019-2021 ZettaDB inc. All rights reserved.
+
+   This source code is licensed under Apache 2.0 License,
+   combined with Common Clause Condition 1.0, as detailed in the NOTICE file.
+*/
+
 package commonUtil
 
 import (
@@ -88,7 +95,7 @@ func (m *MysqlInstanceOps) FetchWorkingDir() error {
 	if err != nil {
 		return err
 	}
-	var cmd = fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe| awk -F'--defaults-file' '{printf $1}'| awk -F' ' '{print $NF}'", port)
+	var cmd = fmt.Sprintf("ps -ef | grep %s | grep -v grep | grep -v mysqld_safe| grep mysqld | awk -F'--defaults-file' '{printf $1}'| awk -F' ' '{print $NF}'", port)
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	output := sh.Stdout()

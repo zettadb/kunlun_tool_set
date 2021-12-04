@@ -1,3 +1,9 @@
+/*
+   Copyright (c) 2019-2021 ZettaDB inc. All rights reserved.
+
+   This source code is licensed under Apache 2.0 License,
+   combined with Common Clause Condition 1.0, as detailed in the NOTICE file.
+*/
 package main
 
 import (
@@ -24,6 +30,7 @@ func main() {
 	}
 
 	fmt.Println("restore xtrabackup successfully")
+	logger.Log.Info("restore xtrabackup successfully")
 
 	time.Sleep(time.Second * 2)
 	restoreFastApplyBinlog := restoreUtil.NewDoFastApplyBinlogType()
@@ -38,6 +45,8 @@ func main() {
 		os.Exit(-1)
 	}
 
+	logger.Log.Info("restore fastApplyBinlog successfully")
+	logger.Log.Info("restore MySQL instance successfully")
 	fmt.Println("restore fastApplyBinlog successfully")
 	fmt.Println("restore MySQL instance successfully")
 
