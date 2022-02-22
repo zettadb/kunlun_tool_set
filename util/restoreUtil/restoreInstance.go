@@ -94,19 +94,23 @@ func (dx *DoRestoreColdbackType) preCheckInstance() error {
 	err := dx.Opts.IsAlive()
 	if err != nil {
 		logger.Log.Error(err.Error())
-		return err
+		//return err
 	}
 	//shut down the dest MySQL instance
 	retval, err := dx.Opts.ShutDownByKill()
 	if retval == false {
-		return err
+		//return err
 	}
 	return nil
 }
 
 func (dx *DoRestoreColdbackType) DownloadColdXtraFileByTime(storePath *string, remotePath string, timePoint string) error {
-
-	cmd := fmt.Sprintf("hadoop fs -ls %s", remotePath)
+	var cmd = ""
+	if len(configParse.HdfsNameNode) != 0 {
+		cmd = fmt.Sprintf("hadoop fs -fs %s -ls %s", configParse.HdfsNameNode, remotePath)
+	} else {
+		cmd = fmt.Sprintf("hadoop fs -ls %s", remotePath)
+	}
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err := sh.Run()
 	if err != nil {
@@ -148,25 +152,30 @@ func (dx *DoRestoreColdbackType) DownloadColdXtraFileByTime(storePath *string, r
 		return sortedKey[i] <= sortedKey[j]
 	})
 
-	var index int = 0
+	var index = 0
 	var key int64 = 0
+	var founded = false
 	for index, key = range sortedKey {
 		if key >= restoreTimeUnix {
+			founded = true
 			break
 		}
 	}
-	if index > 0 {
+	if founded == true && index != 0 {
 		index = index - 1
 	}
-
 	key = sortedKey[index]
-	if restoreTimeUnix-key >= 86400 {
+	if !(restoreTimeUnix-key > 0 && restoreTimeUnix-key < 86400) {
 		return fmt.Errorf("latest cold back file is %s, some cold back may lost", timePathMap[key])
 	}
 	xtrabacupFullPathLocal := fmt.Sprintf("%s/xtraColdFile.tgz", *storePath)
 	dx.Param.ColdBackupFilePath = xtrabacupFullPathLocal
 
-	cmd = fmt.Sprintf("hadoop fs -get %s %s", timePathMap[key], xtrabacupFullPathLocal)
+	if len(configParse.HdfsNameNode) != 0 {
+		cmd = fmt.Sprintf("hadoop fs -fs %s -get %s %s", configParse.HdfsNameNode, timePathMap[key], xtrabacupFullPathLocal)
+	} else {
+		cmd = fmt.Sprintf("hadoop fs -get %s %s", timePathMap[key], xtrabacupFullPathLocal)
+	}
 	fmt.Println(cmd)
 	sh1 := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh1.Run()
@@ -252,37 +261,49 @@ func (dx *DoRestoreColdbackType) doXtrabackupPrepare(xtrabackupbaseDir string) e
 	return nil
 }
 
+func (dx *DoRestoreColdbackType) cleanDataDirBeforeCopyBack() error {
+	cmd1 := fmt.Sprintf("rm -r ")
+	args := make([]string, 0)
+
+	datadir := dx.Param.MysqlParam.Parameters["datadir"]
+	args = append(args, datadir)
+	binlogdir := filepath.Dir(dx.Param.MysqlParam.Parameters["log-bin"])
+	args = append(args, binlogdir)
+	relaydir := filepath.Dir(dx.Param.MysqlParam.Parameters["relay-log"])
+	args = append(args, relaydir)
+	innodbLogDir := dx.Param.MysqlParam.Parameters["innodb_log_group_home_dir"]
+	args = append(args, innodbLogDir)
+	innodbDataHomeDir := dx.Param.MysqlParam.Parameters["innodb_data_home_dir"]
+	args = append(args, innodbDataHomeDir)
+
+	sh1 := shellRunner.NewShellRunner(cmd1, args)
+	err := sh1.Run()
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", sh1.OutPut()))
+		return err
+	}
+	logger.Log.Debug(fmt.Sprintf("clean dir successfully, %s", sh1.Sh.Bash))
+
+	cmd2 := fmt.Sprintf("mkdir -p ")
+	sh2 := shellRunner.NewShellRunner(cmd2, args)
+	err = sh2.Run()
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("%s", sh2.OutPut()))
+		return err
+	}
+	logger.Log.Debug(fmt.Sprintf("remake dir successfully, %s", sh2.Sh.Bash))
+	return nil
+
+}
+
 func (dx *DoRestoreColdbackType) doXtrabackupRestore(xtrabackupbaseDir string) error {
 	//before Doing this, we need to confirm that the dest instance `datadir` is
 	//empty, if not ,we will clean it.
-	datadir := dx.Param.MysqlParam.Parameters["datadir"]
-	binlogdir := filepath.Dir(dx.Param.MysqlParam.Parameters["log-bin"])
-	relaydir := filepath.Dir(dx.Param.MysqlParam.Parameters["relay-log"])
-	err := os.RemoveAll(datadir)
+	err := dx.cleanDataDirBeforeCopyBack()
 	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
-	err = os.RemoveAll(binlogdir)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
-	err = os.RemoveAll(relaydir)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
+		return err
 	}
 
-	err = os.MkdirAll(datadir, 0755)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
-	err = os.MkdirAll(binlogdir, 0755)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
-	err = os.MkdirAll(relaydir, 0755)
-	if err != nil {
-		logger.Log.Error(fmt.Sprintf("%s", err.Error()))
-	}
 	args := []string{
 		fmt.Sprintf("--defaults-file=%s", dx.Param.MysqlParam.Path),
 		"--copy-back",
@@ -304,10 +325,12 @@ func (dx *DoRestoreColdbackType) postOpsAndCheck() error {
 	if err != nil {
 		return err
 	}
-	err = dx.Opts.IsAlive()
+
+	err = dx.Opts.ResetSlave()
 	if err != nil {
-		return fmt.Errorf("mysqld is not alive after finish the xtrabackup restore")
+		return err
 	}
+
 	return nil
 
 }
@@ -378,7 +401,7 @@ func (d *DoFastApplyBinlogType) ApplyFastBinlogApply() error {
 func (d *DoFastApplyBinlogType) Init() error {
 	if d.Param.GlobalConsistentEnable {
 		d.ClogObj.ClogPath = d.BaseDir + "/commit.log"
-		d.ClogObj.MetaConnString = configParse.RestoreUtilArgs.MetaClusterConnStr
+		d.ClogObj.MetaConnString = configParse.RestoreUtilArgs.OrigMetaClusterConnStr
 		d.ClogObj.OrgClusterId = configParse.RestoreUtilArgs.OrigClusterName
 		d.ClogObj.RestoreTime = configParse.RestoreUtilArgs.RestoreTime
 	}
@@ -645,7 +668,13 @@ func (d *DoFastApplyBinlogType) fetchBinlogFileFromHdfs() error {
 	hdfsPathPrefix := fmt.Sprintf("%s/binlog/%s/%s/%s",
 		configParse.HdfsBaseDir, d.Param.OrigClusterName, d.Param.OrigShardName, date)
 
-	cmd := fmt.Sprintf("hadoop fs -ls %s", hdfsPathPrefix)
+	var cmd = ""
+	if len(configParse.HdfsNameNode) != 0 {
+		cmd = fmt.Sprintf("hadoop fs -fs %s -ls %s", configParse.HdfsNameNode, hdfsPathPrefix)
+	} else {
+		cmd = fmt.Sprintf("hadoop fs -ls %s", hdfsPathPrefix)
+
+	}
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	if err != nil {
@@ -694,8 +723,14 @@ func (d *DoFastApplyBinlogType) fetchBinlogFileFromHdfs() error {
 		binlogPath := timePathMap[key_]
 		binlogOrigName := d.fetchBinlogNameFromHdfsPath(binlogPath)
 		// download file to the binlog_base
-		cmd := fmt.Sprintf("hadoop fs -get %s %s", binlogPath,
-			fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName))
+		if len(configParse.HdfsNameNode) != 0 {
+			cmd = fmt.Sprintf("hadoop fs -fs %s -get %s %s", configParse.HdfsNameNode, binlogPath,
+				fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName))
+		} else {
+			cmd = fmt.Sprintf("hadoop fs -get %s %s", binlogPath,
+				fmt.Sprintf("%s/%s.lz4", binlog_download_base, binlogOrigName))
+
+		}
 		sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 		err = sh.Run()
 		if err != nil {
@@ -733,6 +768,7 @@ func (d *DoFastApplyBinlogType) ExtractBinlogBackupToRelayPath() error {
 	//Get the relay log path
 	para := d.Param.MysqlParam.Parameters["relay-log"]
 	relayPath, _ := filepath.Split(para)
+	relayPath = strings.TrimPrefix(relayPath, " ")
 	_ = os.MkdirAll(relayPath, 0755)
 
 	//Untar the binlog backup file to the relay path
@@ -745,14 +781,18 @@ func (d *DoFastApplyBinlogType) ExtractBinlogBackupToRelayPath() error {
 	}
 	orgBinlogFileIndexStr := make(map[int]string)
 	//Rename the binlog backup to relay name prefix
-	var relayLogfilePath = relayPath + "/binlog_base"
+	var relayLogfilePath = relayPath + "binlog_base"
 	files, err := ioutil.ReadDir(relayLogfilePath)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return err
 	}
 	for _, f := range files {
 		//fetch index in the whole binlog file name
 		fname := f.Name()
+		if strings.HasSuffix(fname, ".log") {
+			continue
+		}
 		tokens := strings.Split(fname, ".")
 		if len(tokens) != 2 {
 			return fmt.Errorf("invalid Binlog file name Error %s", fname)

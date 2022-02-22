@@ -8,10 +8,14 @@
 package commonUtil
 
 import (
+	"database/sql"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
 	"path/filepath"
 	"strings"
+	"time"
 	"zetta_util/util/configParse"
+	"zetta_util/util/logger"
 	"zetta_util/util/shellRunner"
 )
 
@@ -68,7 +72,23 @@ func (m *MysqlInstanceOps) StartMysqld() error {
 	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
 	err = sh.Run()
 	if err != nil {
-		fmt.Println(err.Error())
+		//fmt.Println(err.Error())
+		return err
+	}
+
+	return nil
+}
+func (m *MysqlInstanceOps) StopMysqld() error {
+	m.Init()
+	port, err := m.port()
+	if err != nil {
+		return err
+	}
+	cmd := fmt.Sprintf("cd %s;./stopmysql.sh %s", m.DbaToolPath, port)
+	sh := shellRunner.NewShellRunner(cmd, make([]string, 0))
+	err = sh.Run()
+	if err != nil {
+		//fmt.Println(err.Error())
 		return err
 	}
 
@@ -116,4 +136,41 @@ func (m *MysqlInstanceOps) FetchWorkingDir() error {
 	m.DbaToolPath = installPath + "dba_tools"
 	m.DirFetched = true
 	return nil
+}
+func (m *MysqlInstanceOps) ResetSlave() error {
+	var count = 0
+	m.Init()
+	conn := m.GetConn()
+	for conn == nil && count < 20 {
+		logger.Log.Debug(fmt.Sprintf("get connect failed ,retry %d", count))
+		time.Sleep(time.Second * 1)
+		conn = m.GetConn()
+		count++
+	}
+
+	if conn == nil {
+		return fmt.Errorf("reset slave faild, get conn faild")
+	}
+	_, err := conn.Query("reset slave")
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("exec 'reset slave' faild"))
+		return err
+	}
+	logger.Log.Debug("reset slave successfully")
+	return nil
+}
+func (m *MysqlInstanceOps) GetConn() *sql.DB {
+	connStr := fmt.Sprintf("pgx:pgx_pwd@tcp(%s:%s)/mysql", m.MysqlEtcFile.Parameters["bind_address"], m.MysqlEtcFile.Parameters["port"])
+	dbConn, err := sql.Open("mysql", connStr)
+	if err != nil {
+		logger.Log.Error(err.Error())
+		return nil
+	}
+	err = dbConn.Ping()
+	if err != nil {
+		logger.Log.Error(err.Error())
+		dbConn.Close()
+		return nil
+	}
+	return dbConn
 }

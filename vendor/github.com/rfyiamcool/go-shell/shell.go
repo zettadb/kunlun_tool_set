@@ -224,6 +224,11 @@ func (c *Cmd) handleWait() error {
 
 	// join process
 	err := c.stdcmd.Wait()
+
+	c.Status.Stdout = c.stdout.String()
+	c.Status.Stderr = c.stderr.String()
+	c.Status.Output = c.output.String()
+
 	if c.ctx.Err() == context.DeadlineExceeded {
 		return err
 	}
@@ -236,9 +241,6 @@ func (c *Cmd) handleWait() error {
 		return err
 	}
 
-	c.Status.Stdout = c.stdout.String()
-	c.Status.Stderr = c.stderr.String()
-	c.Status.Output = c.output.String()
 	return nil
 }
 

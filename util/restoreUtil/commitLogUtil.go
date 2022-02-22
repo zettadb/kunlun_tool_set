@@ -61,7 +61,7 @@ func (c *CommitLoggerProcessor) PrepareCommitLogEntryToFile() error {
 		return err
 	}
 	if len(c.RestoreTime) == 0 {
-		return fmt.Errorf("restoretime should not be specified if globalconsistent param is true")
+		return fmt.Errorf("restoretime should not be empty if globalconsistent param is true")
 	} else {
 		query = fmt.Sprintf(
 			"SELECT * FROM `kunlun_metadata_db`.`commit_log_%s` where prepare_ts <= '%s'",

@@ -11,14 +11,6 @@ import (
 	"zetta_util/util/configParse"
 )
 
-type FileOperateInterface interface {
-	PushFileToRemote() error
-}
-
-func FileOperatorFactory(tp string) FileOperateInterface {
-	return nil
-}
-
 type backupInstance interface {
 	ColdBackup(arguments *configParse.BackupUtilArguments) error
 	IncreamentalLogBackup(arguments *configParse.BackupUtilArguments) error
@@ -39,25 +31,21 @@ func RunIncreamentalLogBackup(instance backupInstance) error {
 	return nil
 }
 
-func RunBackup() error {
+func RunBackup(types string) error {
 
-	mysqlBackup := NewDoMysqlBackupType()
-	postgresBackup := &DoPostgresBackupType{}
+	var instance backupInstance
+	if types != "compute" {
+		instance = NewDoMysqlBackupType()
+	} else {
+		instance = &DoPostgresBackupType{}
+	}
 	var err error
-	err = RunColdBackup(mysqlBackup)
-	if err != nil {
-		return err
-	}
-	err = RunColdBackup(postgresBackup)
+	err = RunColdBackup(instance)
 	if err != nil {
 		return err
 	}
 
-	err = RunIncreamentalLogBackup(mysqlBackup)
-	if err != nil {
-		return err
-	}
-	err = RunIncreamentalLogBackup(postgresBackup)
+	err = RunIncreamentalLogBackup(instance)
 	if err != nil {
 		return err
 	}

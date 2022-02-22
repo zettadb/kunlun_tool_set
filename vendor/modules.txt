@@ -34,6 +34,9 @@ github.com/lestrrat-go/file-rotatelogs/internal/option
 github.com/lestrrat-go/strftime
 # github.com/lib/pq v1.10.3
 ## explicit; go 1.13
+github.com/lib/pq
+github.com/lib/pq/oid
+github.com/lib/pq/scram
 # github.com/magiconair/properties v1.8.5
 ## explicit; go 1.13
 # github.com/metakeule/fmtdate v1.1.2

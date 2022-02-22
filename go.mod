@@ -9,6 +9,7 @@ require (
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/jmoiron/sqlx v1.3.3
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
+	github.com/lib/pq v1.10.3
 	github.com/metakeule/fmtdate v1.1.2
 	github.com/pkg/sftp v1.13.4
 	github.com/rfyiamcool/go-shell v1.0.0
@@ -23,7 +24,6 @@ require (
 	github.com/jessevdk/go-flags v1.5.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lestrrat-go/strftime v1.0.5 // indirect
-	github.com/lib/pq v1.10.3 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/mitchellh/mapstructure v1.4.2 // indirect
 	github.com/pelletier/go-toml v1.9.4 // indirect

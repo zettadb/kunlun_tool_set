@@ -22,6 +22,18 @@ func main() {
 		fmt.Println(err.Error())
 		os.Exit(-1)
 	}
+
+	if configParse.RestoreUtilArgs.RestoreType == "compute" {
+		restoreCompute := &restoreUtil.RestoreComputeNodeType{}
+		err = restoreCompute.RestoreComputeNode(&configParse.RestoreUtilArgs)
+		if err != nil {
+			logger.Log.Error(err.Error())
+			os.Exit(-1)
+		}
+		logger.Log.Info("restore Compute instance successfully")
+		fmt.Println("restore Compute successfully")
+		os.Exit(0)
+	}
 	restoreColdback := restoreUtil.NewDoRestoreColdbackType()
 	err = restoreColdback.ApplyColdBack()
 	if err != nil {
@@ -33,17 +45,17 @@ func main() {
 	logger.Log.Info("restore xtrabackup successfully")
 
 	time.Sleep(time.Second * 2)
-	restoreFastApplyBinlog := restoreUtil.NewDoFastApplyBinlogType()
-	if restoreFastApplyBinlog == nil {
-		fmt.Println("restore fastApplyBinlog failed")
-		os.Exit(-1)
-	}
+	//restoreFastApplyBinlog := restoreUtil.NewDoFastApplyBinlogType()
+	//if restoreFastApplyBinlog == nil {
+	//	fmt.Println("restore fastApplyBinlog failed")
+	//	os.Exit(-1)
+	//}
 
-	err = restoreFastApplyBinlog.ApplyFastBinlogApply()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
-	}
+	//err = restoreFastApplyBinlog.ApplyFastBinlogApply()
+	//if err != nil {
+	//	fmt.Println(err)
+	//	os.Exit(-1)
+	//}
 
 	logger.Log.Info("restore fastApplyBinlog successfully")
 	logger.Log.Info("restore MySQL instance successfully")

@@ -9,8 +9,6 @@ package shellRunner
 
 import (
 	"fmt"
-	"github.com/elliotchance/orderedmap"
-	"github.com/metakeule/fmtdate"
 	"github.com/rfyiamcool/go-shell"
 	"strings"
 	"zetta_util/util/logger"
@@ -23,32 +21,7 @@ type ShellRunner struct {
 	retStatus shell.Status
 }
 
-func DoCmdTest(cmd string) {
-	sh := NewShellRunner(cmd, make([]string, 0))
-	err := sh.Run()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	//	fmt.Println(sh.Stdout())
-	lsOutPut := sh.Stdout()
-	timePathMap := orderedmap.NewOrderedMap()
-	for _, lines := range strings.Split(lsOutPut, "\n") {
-		if strings.HasSuffix(lines, ".tgz") {
-			tokenVec := strings.Split(lines, "_")
-			vecSize := len(tokenVec)
-			timeV := tokenVec[vecSize-3 : vecSize-1]
-			unixTime, _ := fmtdate.Parse("YYYY#MM#DD_hh#mm#ss",
-				fmt.Sprintf("%s_%s", timeV[0], timeV[1]))
-			lineV := strings.Split(lines, " ")
-			line := lineV[len(lineV)-1:]
-			timePathMap.Set(unixTime.Unix(), line)
-		}
-	}
-
-}
-
 func NewShellRunner(cmd string, args []string) *ShellRunner {
-
 	c := &ShellRunner{
 		Command: cmd,
 		Args:    args,
@@ -68,13 +41,13 @@ func NewShellRunner(cmd string, args []string) *ShellRunner {
 }
 
 func (s *ShellRunner) Run() error {
-	//fmt.Printf("will run %s\n", s.Sh.Bash)
 	err := s.Sh.Run()
 	s.retStatus = s.Sh.Status
 	if err != nil {
 		logger.Log.Error(fmt.Sprintf("exec cmd: %s output: %s", s.Sh.Bash, s.OutPut()))
 		return fmt.Errorf("exec cmd: %s output: %s", s.Sh.Bash, s.OutPut())
 	}
+	logger.Log.Debug(fmt.Sprintf("run shell: %s, output: %s", s.Sh.Bash, s.OutPut()))
 	return nil
 }
 
@@ -95,7 +68,7 @@ func (s *ShellRunner) OutPut() string {
 	for strings.HasSuffix(out, "\n") {
 		out = strings.TrimSuffix(out, "\n")
 	}
-	return fmt.Sprintf("stdout:%s stderr:%s", out, err)
+	return fmt.Sprintf("exitCode:%d stdout:%s stderr:%s", s.retStatus.ExitCode, out, err)
 }
 
 func (s *ShellRunner) Stdout() string {

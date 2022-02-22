@@ -23,7 +23,7 @@ func main() {
 		fmt.Println(err.Error())
 		os.Exit(-1)
 	}
-	err = backupUtil.RunBackup()
+	err = backupUtil.RunBackup(configParse.BackupUtilArgs.BackupType)
 	if err != nil {
 		logger.Log.Error(err.Error())
 		fmt.Println(err.Error())
