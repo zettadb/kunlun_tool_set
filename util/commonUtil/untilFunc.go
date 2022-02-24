@@ -9,10 +9,16 @@ package commonUtil
 
 import (
 	"archive/tar"
+	"database/sql"
+	_ "github.com/go-sql-driver/mysql"
 	"io"
 	"os"
 	"path/filepath"
 )
+
+func ReturnMasterConnByShardId(metaConn *sql.DB, clusterId string, shardId string) *sql.DB {
+	return nil
+}
 
 func Untar(tarball, target string) error {
 	reader, err := os.Open(tarball)
