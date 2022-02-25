@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	"os"
@@ -103,24 +104,88 @@ func renameTableOnTarget(mysqlConnection *sql.DB, dbName string, tableName strin
 	return nil
 }
 
-func renameTable(srcMysql *sql.DB, dstMysql *sql.DB, dbName string, tableName string, suffixInfo string) error {
-	var renameStmt = fmt.Sprintf("rename table %s.%s to %s.%s_expand_%s",
-		dbName, tableName, dbName, tableName, suffixInfo)
-	for {
-		//todo: add retry number logic here
-		_, err := srcMysql.Exec(renameStmt)
-		if err != nil {
-			//todo: add kill session logic here
-			//		time.Sleep(1 * time.Second)
-			return fmt.Errorf("sql:%s err:%s", renameStmt, err.Error())
-		} else {
-			break
+func killSession(ctx context.Context, srcMysql *sql.DB, dbname string, table string) {
+
+	//todo: add log here
+	sql := fmt.Sprintf("select t.processlist_id id "+
+		"from performance_schema.metadata_locks m inner join performance_schema.threads t "+
+		"on m.owner_thread_id = t.thread_id "+
+		"where m.object_type='TABLE' and m.object_schema='%s' and m.object_name='%s' and lock_status='GRANTED'",
+		dbname, table)
+	rows, err := srcMysql.Query(sql)
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("sql: %s , err: %s", err.Error()))
+		os.Exit(-1)
+	}
+	result := commonUtil.MySQLQueryResult{}
+	result.Transfer(rows)
+	if result.RowsNum() > 0 {
+		//do kill
+		num := result.RowsNum()
+		for i := 0; i < num; i++ {
+			killsql := fmt.Sprintf("kill %s", result.GetValueString(i, "id").String)
+			srcMysql.Exec(killsql)
 		}
 	}
-	time.Sleep(1 * time.Second)
+}
+
+func renameLongLock(ctx context.Context, srcMysql *sql.DB, renameStmt string, result chan error) {
+	var setLockTimeout = fmt.Sprintf("set session lock_wait_timeout=10")
+	_, err := srcMysql.Exec(setLockTimeout)
+
+	if err != nil {
+		result <- err
+		return
+	}
+
+	// may block 10secs
+	_, err = srcMysql.Exec(renameStmt)
+
+	if err != nil {
+		result <- err
+		return
+	}
+	success := fmt.Errorf("success")
+	result <- success
+	return
+}
+
+func renameTable(srcMysql *sql.DB, dstMysql *sql.DB, dbName string, tableName string, suffixInfo string) error {
+
+	ctx, cancle := context.WithCancel(context.Background())
+	defer cancle()
+	var setLockTimeout = fmt.Sprintf("set session lock_wait_timeout=1")
+	_, err := srcMysql.Exec(setLockTimeout)
+
+	var renameStmt = fmt.Sprintf("rename table %s.%s to %s.%s_expand_%s", dbName, tableName, dbName, tableName, suffixInfo)
+
+	//todo: add retry number logic here
+	_, err = srcMysql.Exec(renameStmt)
+	me, _ := err.(*mysql.MySQLError)
+	if err != nil && me.Number == 1205 {
+		// ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+		renameResult := make(chan error)
+		go renameLongLock(ctx, srcMysql, renameStmt, renameResult)
+		time.Sleep(500 * time.Millisecond)
+		go killSession(ctx, srcMysql, dbName, tableName)
+		select {
+		case res := <-renameResult:
+			{
+				if "success" == res.Error() {
+					break
+				} else {
+					return err
+				}
+			}
+		}
+	} else if err != nil {
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+
 	// check target MySQL instance has already sync the statement
 	var checkStmt = fmt.Sprintf("show create table %s.%s_expand_%s", dbName, tableName, suffixInfo)
-	_, err := dstMysql.Exec(checkStmt)
+	_, err = dstMysql.Exec(checkStmt)
 	if err != nil {
 		return fmt.Errorf("target MySQL didn't sync the rename stmt: %s", err.Error())
 	}
@@ -276,6 +341,80 @@ func validateExpandSuffix(origInfo string) string {
 	return realInfo
 }
 
+func reRouteAppenDdlLog(metaConnection *sql.DB, clusterId string, srcShardId string, dstShardId string) error {
+	//Step1 : get_lock()
+	var err error = nil
+	unlockStmt := fmt.Sprintf("select release_lock('DDL')")
+	defer metaConnection.Exec(unlockStmt)
+
+	getLockStmt := fmt.Sprintf("select get_lock('DDL',1)")
+	_, err = metaConnection.Exec(getLockStmt)
+
+	var retrynum = 100
+	for err != nil && retrynum > 0 {
+		//retry
+		time.Sleep(1 * time.Second)
+		_, err = metaConnection.Exec(getLockStmt)
+		retrynum--
+	}
+
+	clusterName, err := getClusterName(metaConnection, clusterId)
+	if err != nil {
+		return err
+	}
+
+	//Step2: Begin()
+	beginStmt := fmt.Sprintf("begin")
+	_, err = metaConnection.Exec(beginStmt)
+	if err != nil {
+		return err
+	}
+
+	//Step3: call append_ddl_log_entry()
+	for _, item := range tableSpecVec {
+		setVar := fmt.Sprintf("set @my_opid=0")
+		_, err = metaConnection.Exec(setVar)
+		if err != nil {
+			return err
+		}
+
+		sql := fmt.Sprintf("update pg_catalog.pg_class set relshardid=%s where relname=\\'%s\\' and relshardid=%s",
+			dstShardId, item.tableName, srcShardId)
+		appendStmt := fmt.Sprintf(
+			"call kunlun_metadata_db.append_ddl_log_entry('ddl_ops_log_%s','%s','%s'"+
+				",'','','','others','others',0,'%s','',0,0,@my_opid)",
+			clusterName, item.dbInfo, item.schemaName, sql)
+		_, err = metaConnection.Exec(appendStmt)
+		if err != nil {
+			return err
+		}
+	}
+	//Step4: commit()
+	commit := fmt.Sprintf("commit")
+	_, err = metaConnection.Exec(commit)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+func getClusterName(metaConnection *sql.DB, id string) (string, error) {
+	sql := fmt.Sprintf("select name from kunlun_metadata_db.db_clusters where id = %s ", id)
+	rows, err := metaConnection.Query(sql)
+	if err != nil {
+		return "", err
+	}
+	result := commonUtil.MySQLQueryResult{}
+	err = result.Transfer(rows)
+	if err != nil {
+		return "", err
+	}
+	if result.RowsNum() != 1 {
+		return "", fmt.Errorf("can't find unique cluster name by cluster id %s", id)
+	}
+	return result.GetValueString(0, "name").String, nil
+
+}
 func reRoute(metaConnection *sql.DB, clusterId string, srcShardId string, dstShardId string) error {
 
 	//fetch comp node info
@@ -411,6 +550,8 @@ func main() {
 	}
 	// reroute
 	err = reRoute(metaMysqlConnection, *clusterId, *srcShardId, *dstShardId)
+	// todo: Wait new version of the compute node
+	//err = reRouteAppenDdlLog(metaMysqlConnection, *clusterId, *srcShardId, *dstShardId)
 	if err != nil {
 		os.Stderr.WriteString(err.Error())
 		doClean(dstMysqlConnection, *expandInfoSuffix)
