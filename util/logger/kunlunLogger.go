@@ -44,16 +44,14 @@ func CallerFormat(entity *runtime.Frame) string {
 	return b.String()
 }
 
-func init() {
+func SetUpLogger(dir string) {
 
-	Log = logrus.New()
-
-	if len(prefixLogName) == 0 {
-		prefixLogName = "sys_" + filepath.Base(os.Args[0])
-	}
-	if len(Directory) == 0 {
+	if len(dir) == 0 {
 		Directory = "../log"
+	} else {
+		Directory = dir
 	}
+
 	var path = Directory + "/" + prefixLogName + ".%Y-%m-%d.log"
 
 	ioptr, _ := rotatelogs.New(path,
@@ -72,4 +70,13 @@ func init() {
 		CustomCallerFormatter: CallerFormat,
 	},
 	)
+
+}
+
+func init() {
+	Log = logrus.New()
+
+	if len(prefixLogName) == 0 {
+		prefixLogName = "sys_" + filepath.Base(os.Args[0])
+	}
 }

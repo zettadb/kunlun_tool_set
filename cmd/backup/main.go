@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	logger.SetUpLogger("../log")
 	logger.Log.Debug("start backup")
 	err := configParse.ParseArgBackup()
 	if err != nil {

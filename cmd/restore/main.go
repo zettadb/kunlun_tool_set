@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	logger.SetUpLogger("../log")
 	logger.Log.Debug(fmt.Sprintf("start restore"))
 	err := configParse.ParseArgRestore()
 	if err != nil {

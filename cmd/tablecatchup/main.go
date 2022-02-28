@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"zetta_util/util/commonUtil"
+	"zetta_util/util/logger"
 	"zetta_util/util/shellRunner"
 )
 
@@ -84,18 +85,23 @@ func finishSync(rows sql.Rows) bool {
 	SlaveSqlRunningState := result.GetValueString(0, "Slave_SQL_Running_State")
 	SlaveSqlRunning := result.GetValueString(0, "Slave_SQL_Running")
 	if SlaveSqlRunningState.String == "Slave has read all relay log; waiting for more updates" && SlaveSqlRunning.String == "Yes" {
+		logger.Log.Info(fmt.Sprintf("salve have already finish all binlog from master"))
 		return true
 	}
+
+	logger.Log.Info(fmt.Sprintf("Salve is not reach the shift point, continue and loop check"))
 	return false
 }
 
 func renameTableOnTarget(mysqlConnection *sql.DB, dbName string, tableName string, suffixInfo string) error {
 	var renameStmt = fmt.Sprintf("rename table %s.%s_expand_%s to %s.%s",
 		dbName, tableName, suffixInfo, dbName, tableName)
+	logger.Log.Info(fmt.Sprintf("rename table on target: %s", renameStmt))
 	for {
 		//todo: add retry number logic here
 		_, err := mysqlConnection.Exec(renameStmt)
 		if err != nil {
+			logger.Log.Error(err.Error())
 			time.Sleep(2 * time.Second)
 		} else {
 			break
@@ -112,8 +118,10 @@ func killSession(ctx context.Context, srcMysql *sql.DB, dbname string, table str
 		"on m.owner_thread_id = t.thread_id "+
 		"where m.object_type='TABLE' and m.object_schema='%s' and m.object_name='%s' and lock_status='GRANTED'",
 		dbname, table)
+	logger.Log.Info(fmt.Sprintf("will exec: %s", sql))
 	rows, err := srcMysql.Query(sql)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		os.Stderr.WriteString(fmt.Sprintf("sql: %s , err: %s", err.Error()))
 		os.Exit(-1)
 	}
@@ -124,9 +132,11 @@ func killSession(ctx context.Context, srcMysql *sql.DB, dbname string, table str
 		num := result.RowsNum()
 		for i := 0; i < num; i++ {
 			killsql := fmt.Sprintf("kill %s", result.GetValueString(i, "id").String)
+			logger.Log.Info(fmt.Sprintf("will exec: %s", killsql))
 			srcMysql.Exec(killsql)
 		}
 	}
+	logger.Log.Info(fmt.Sprintf("finish kill session"))
 }
 
 func renameLongLock(ctx context.Context, srcMysql *sql.DB, renameStmt string, result chan error) {
@@ -145,6 +155,7 @@ func renameLongLock(ctx context.Context, srcMysql *sql.DB, renameStmt string, re
 		result <- err
 		return
 	}
+	logger.Log.Info(fmt.Sprintf("rename success: %s", renameStmt))
 	success := fmt.Errorf("success")
 	result <- success
 	return
@@ -152,18 +163,23 @@ func renameLongLock(ctx context.Context, srcMysql *sql.DB, renameStmt string, re
 
 func renameTable(srcMysql *sql.DB, dstMysql *sql.DB, dbName string, tableName string, suffixInfo string) error {
 
+	logger.Log.Info(fmt.Sprintf("start rename %s.%s", dbName, tableName))
 	ctx, cancle := context.WithCancel(context.Background())
 	defer cancle()
 	var setLockTimeout = fmt.Sprintf("set session lock_wait_timeout=1")
+	logger.Log.Info(fmt.Sprintf("exec: %s", setLockTimeout))
 	_, err := srcMysql.Exec(setLockTimeout)
 
 	var renameStmt = fmt.Sprintf("rename table %s.%s to %s.%s_expand_%s", dbName, tableName, dbName, tableName, suffixInfo)
+	logger.Log.Info(fmt.Sprintf("will do: %s", renameStmt))
 
 	//todo: add retry number logic here
 	_, err = srcMysql.Exec(renameStmt)
 	me, _ := err.(*mysql.MySQLError)
 	if err != nil && me.Number == 1205 {
 		// ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+		logger.Log.Error(err.Error())
+		logger.Log.Error(fmt.Sprintf("rename faild, so start killsession and rename agine"))
 		renameResult := make(chan error)
 		go renameLongLock(ctx, srcMysql, renameStmt, renameResult)
 		time.Sleep(500 * time.Millisecond)
@@ -187,6 +203,7 @@ func renameTable(srcMysql *sql.DB, dstMysql *sql.DB, dbName string, tableName st
 	var checkStmt = fmt.Sprintf("show create table %s.%s_expand_%s", dbName, tableName, suffixInfo)
 	_, err = dstMysql.Exec(checkStmt)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return fmt.Errorf("target MySQL didn't sync the rename stmt: %s", err.Error())
 	}
 	return nil
@@ -205,6 +222,7 @@ func getSlaveStat(ctx context.Context, dstMysql *sql.DB, pipe chan sql.Rows, exp
 		var showSlaveStmt = fmt.Sprintf("show slave status for channel 'expand_%s'", expandInfoSuffix)
 		result, err := dstMysql.Query(showSlaveStmt)
 		if err != nil {
+			logger.Log.Error(fmt.Sprintf("sql:%s,err:%s", showSlaveStmt, err.Error()))
 			return
 		}
 		pipe <- *result
@@ -213,13 +231,17 @@ func getSlaveStat(ctx context.Context, dstMysql *sql.DB, pipe chan sql.Rows, exp
 
 func doClean(mysqlConn *sql.DB, expandInfoSuffix string) error {
 	stopSlaveStmt := fmt.Sprintf("stop slave for channel 'expand_%s'", expandInfoSuffix)
+	logger.Log.Info("exec:%s", stopSlaveStmt)
 	_, err := mysqlConn.Exec(stopSlaveStmt)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return err
 	}
 	resetSlaveAllStmt := fmt.Sprintf("reset slave all for channel 'expand_%s'", expandInfoSuffix)
+	logger.Log.Info("exec:%s", resetSlaveAllStmt)
 	_, err = mysqlConn.Exec(resetSlaveAllStmt)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return err
 	}
 	return nil
@@ -229,13 +251,16 @@ func buildChannelToSync(para *paraMysql, dstMysql *sql.DB, expandInfoSuffix stri
 	//create channel on target MySQL instance point to source MySQL
 
 	//Step1: create channel to the source MySQL instance
+	logger.Log.Info(fmt.Sprintf("Step1: create channel to the source MySQL instance"))
 	var changeMasterStmt = fmt.Sprintf("change master to master_host='%s',master_port=%d,"+
 		"master_user='%s',master_password='%s', master_log_file='%s', master_log_pos = %s ,"+
 		"MASTER_HEARTBEAT_PERIOD=3 for channel 'expand_%s'",
 		para.addr, para.port, para.user, para.pass, FilePos.file, FilePos.pos, expandInfoSuffix)
+	logger.Log.Info(fmt.Sprintf("change master statement :%s", changeMasterStmt))
 
 	_, err := dstMysql.Exec(changeMasterStmt)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return false, err
 	}
 
@@ -251,21 +276,27 @@ func buildChannelToSync(para *paraMysql, dstMysql *sql.DB, expandInfoSuffix stri
 	var changeChannelFilter = fmt.Sprintf("change replication filter "+
 		"REPLICATE_DO_TABLE=(%s) for channel 'expand_%s'",
 		tableList, expandInfoSuffix)
+	logger.Log.Info(fmt.Sprintf("change channel filter: %s", changeChannelFilter))
 
 	_, err = dstMysql.Exec(changeChannelFilter)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return false, err
 	}
 
 	//Step2: start the replicate slave
+	logger.Log.Info(fmt.Sprintf("Step2: start the replicate slave"))
 	var startSlaveStmt = fmt.Sprintf("start slave for channel 'expand_%s'", expandInfoSuffix)
+	logger.Log.Info(fmt.Sprintf("start slave : %s", startSlaveStmt))
 
 	_, err = dstMysql.Exec(startSlaveStmt)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		return false, err
 	}
 
-	// loop check finish
+	//Step3: start loop check the sync is finish
+	logger.Log.Info(fmt.Sprintf("Step3: start loop check the sync is finish"))
 	pipe := make(chan sql.Rows, 5)
 	ctx, cancel := context.WithCancel(context.Background())
 	go getSlaveStat(ctx, dstMysql, pipe, expandInfoSuffix)
@@ -279,10 +310,10 @@ func buildChannelToSync(para *paraMysql, dstMysql *sql.DB, expandInfoSuffix stri
 					cancel()
 					finished = true
 					break
+				} else {
+					continue
 				}
 			}
-		default:
-			time.Sleep(1 * time.Second)
 		}
 		if finished {
 			break
@@ -338,6 +369,7 @@ func validateExpandSuffix(origInfo string) string {
 	} else {
 		realInfo = origInfo
 	}
+	logger.Log.Info(fmt.Sprintf("expand suffix is %s", realInfo))
 	return realInfo
 }
 
@@ -417,6 +449,7 @@ func getClusterName(metaConnection *sql.DB, id string) (string, error) {
 }
 func reRoute(metaConnection *sql.DB, clusterId string, srcShardId string, dstShardId string) error {
 
+	logger.Log.Info(fmt.Sprintf("start rerout on postgres"))
 	//fetch comp node info
 	pgVec := make([]paraPg, 0)
 	sqlStmt := fmt.Sprintf("select * from kunlun_metadata_db.comp_nodes where db_cluster_id = %s", clusterId)
@@ -491,20 +524,25 @@ func main() {
 	var expandInfoSuffix = flag.String("expand_info_suffix", "unix_timestamp", "info specified to indicate the expand procedure")
 
 	var mydumperMetadataFile = flag.String("mydumper_metadata_file", "", "mydumper metadata file path")
+	var loggerDirectory = flag.String("logger_directory", "", "log directroy")
 	flag.Parse()
 	if len(os.Args) < 2 {
 		printIntro()
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
+	//setup logger
+	logger.SetUpLogger(*loggerDirectory)
 	err := parseTableInfo(*tableList, &tableSpecVec)
 	if err != nil {
 		os.Stderr.WriteString(err.Error())
+		logger.Log.Error(err.Error())
 		os.Exit(-1)
 	}
 	err = FilePos.Parse(*mydumperMetadataFile)
 	if err != nil {
 		os.Stderr.WriteString(err.Error())
+		logger.Log.Error(err.Error())
 		os.Exit(-1)
 	}
 	*expandInfoSuffix = validateExpandSuffix(*expandInfoSuffix)
@@ -514,6 +552,7 @@ func main() {
 	srcMysqlConnection, err := sql.Open("mysql", connStr)
 	if err != nil {
 		os.Stderr.WriteString(fmt.Sprintf("Open source MySQL connection failed: %s", err.Error()))
+		logger.Log.Error(fmt.Sprintf("Open source MySQL connection failed: %s", err.Error()))
 		os.Exit(-1)
 	}
 
@@ -521,12 +560,14 @@ func main() {
 	dstMysqlConnection, err := sql.Open("mysql", connStr)
 	if err != nil {
 		os.Stderr.WriteString(fmt.Sprintf("Open target MySQL connection failed: %s", err.Error()))
+		logger.Log.Error(fmt.Sprintf("Open target MySQL connection failed: %s", err.Error()))
 		os.Exit(-1)
 	}
 
 	metaMysqlConnection, err := sql.Open("mysql", *metaUrl)
 	if err != nil {
 		os.Stderr.WriteString(fmt.Sprintf("Open metadata MySQL connection failed: %s", err.Error()))
+		logger.Log.Error(fmt.Sprintf("Open metadata MySQL connection failed: %s", err.Error()))
 		os.Exit(-1)
 	}
 
@@ -553,12 +594,14 @@ func main() {
 	// todo: Wait new version of the compute node
 	//err = reRouteAppenDdlLog(metaMysqlConnection, *clusterId, *srcShardId, *dstShardId)
 	if err != nil {
+		logger.Log.Error(err.Error())
 		os.Stderr.WriteString(err.Error())
 		doClean(dstMysqlConnection, *expandInfoSuffix)
 		os.Exit(-1)
 	}
 
 	//do rename operation on target MySQL
+	logger.Log.Info("Start do rename operation on target MySQL")
 	for _, item := range tableSpecVec {
 		renameTableOnTarget(dstMysqlConnection, item.dbName, item.tableName, *expandInfoSuffix)
 	}
