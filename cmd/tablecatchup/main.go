@@ -501,6 +501,37 @@ func reRoute(metaConnection *sql.DB, clusterId string, srcShardId string, dstSha
 
 	return nil
 }
+func reportAfterSync(metaConn *sql.DB, id string) error {
+	sql := fmt.Sprintf("update kunlun_metadata_db.table_move_jobs"+
+		" set status = 'caught_up',"+
+		" snapshot_binlog_file_idx='%s',"+
+		" snapshot_binlog_file_offset=%s where id =%s",
+		FilePos.file, FilePos.pos, id)
+	_, err := metaConn.Exec(sql)
+	if err != nil {
+		logger.Log.Error(err.Error())
+		return err
+	}
+	return nil
+}
+func reportAfterRename(metaConn *sql.DB, id string) error {
+	sql := fmt.Sprintf("update kunlun_metadata_db.table_move_jobs set status = 'renamed' where id =%s", id)
+	_, err := metaConn.Exec(sql)
+	if err != nil {
+		logger.Log.Error(err.Error())
+		return err
+	}
+	return nil
+}
+func reportAfterReroute(metaConn *sql.DB, id string) error {
+	sql := fmt.Sprintf("update kunlun_metadata_db.table_move_jobs set status = 'rerouted' where id =%s", id)
+	_, err := metaConn.Exec(sql)
+	if err != nil {
+		logger.Log.Error(err.Error())
+		return err
+	}
+	return nil
+}
 
 func main() {
 	// flag define and parse
@@ -525,6 +556,7 @@ func main() {
 
 	var mydumperMetadataFile = flag.String("mydumper_metadata_file", "", "mydumper metadata file path")
 	var loggerDirectory = flag.String("logger_directory", "", "log directroy")
+	var table_move_job_id = flag.String("table_move_job_log_id", "", "id of the metadata db table_move_job_log ")
 	flag.Parse()
 	if len(os.Args) < 2 {
 		printIntro()
@@ -579,6 +611,8 @@ func main() {
 		doClean(dstMysqlConnection, *expandInfoSuffix)
 		os.Exit(-1)
 	}
+	// report to table_move_job_logs
+	reportAfterSync(metaMysqlConnection, *table_move_job_id)
 
 	// do rename operation on source MySQL
 	for _, item := range tableSpecVec {
@@ -589,6 +623,7 @@ func main() {
 			os.Exit(-1)
 		}
 	}
+	reportAfterRename(metaMysqlConnection, *table_move_job_id)
 	// reroute
 	err = reRoute(metaMysqlConnection, *clusterId, *srcShardId, *dstShardId)
 	// todo: Wait new version of the compute node
@@ -599,6 +634,7 @@ func main() {
 		doClean(dstMysqlConnection, *expandInfoSuffix)
 		os.Exit(-1)
 	}
+	reportAfterReroute(metaMysqlConnection, *table_move_job_id)
 
 	//do rename operation on target MySQL
 	logger.Log.Info("Start do rename operation on target MySQL")
@@ -609,5 +645,7 @@ func main() {
 	// clean
 	doClean(dstMysqlConnection, *expandInfoSuffix)
 
+	//os.Stderr.WriteString("tablecatchup error")
+	//os.Exit(-1)
 	os.Exit(0)
 }
