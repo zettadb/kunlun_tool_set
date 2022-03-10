@@ -216,6 +216,7 @@ type ddlLogType struct {
 	schemaName     sql.NullString
 	userName       sql.NullString
 	roleName       sql.NullString
+	searchPath     sql.NullString
 	opType         sql.NullString
 	objType        sql.NullString
 	whenLogged     sql.NullString
@@ -245,6 +246,7 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 			&ddlRow.schemaName,
 			&ddlRow.userName,
 			&ddlRow.roleName,
+			&ddlRow.searchPath,
 			&ddlRow.opType,
 			&ddlRow.objType,
 			&ddlRow.whenLogged,
@@ -268,6 +270,7 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 		schemaname, _ := rowEntry.schemaName.Value()
 		username, _ := rowEntry.userName.Value()
 		rolename, _ := rowEntry.roleName.Value()
+		searchPath, _ := rowEntry.searchPath.Value()
 		optype, _ := rowEntry.opType.Value()
 		objtype, _ := rowEntry.objType.Value()
 		whenlog, _ := rowEntry.whenLogged.Value()
@@ -285,6 +288,7 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 							schema_name = '%s',
 							user_name = '%s',
 							role_name = '%s',
+							search_path = '%s',
 							optype = '%s',
 							objtype = '%s',
 							when_logged = '%s',
@@ -299,6 +303,7 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 			schemaname,
 			username,
 			rolename,
+			searchPath,
 			optype,
 			objtype,
 			whenlog,
