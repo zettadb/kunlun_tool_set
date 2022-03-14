@@ -512,6 +512,7 @@ func reportAfterSync(metaConn *sql.DB, id string) error {
 		logger.Log.Error(err.Error())
 		return err
 	}
+	logger.Log.Info(fmt.Sprintf("exec sql: %s", sql))
 	return nil
 }
 func reportAfterRename(metaConn *sql.DB, id string) error {
@@ -521,6 +522,7 @@ func reportAfterRename(metaConn *sql.DB, id string) error {
 		logger.Log.Error(err.Error())
 		return err
 	}
+	logger.Log.Info(fmt.Sprintf("exec sql: %s", sql))
 	return nil
 }
 func reportAfterReroute(metaConn *sql.DB, id string) error {
@@ -530,6 +532,7 @@ func reportAfterReroute(metaConn *sql.DB, id string) error {
 		logger.Log.Error(err.Error())
 		return err
 	}
+	logger.Log.Info(fmt.Sprintf("exec sql: %s", sql))
 	return nil
 }
 
