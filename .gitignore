@@ -1,3 +1,5 @@
 cmd/restore/template.toml
+cmd/tablecatchup/tablecatchup
+cmd/restore/restore
 .idea/*
 tmp/*
