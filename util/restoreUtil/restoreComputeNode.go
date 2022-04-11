@@ -375,7 +375,79 @@ func (r *RestoreComputeNodeType) restoreDumpedFile(args *configParse.RestoreUtil
 	*/
 	return nil
 }
+func (r *RestoreComputeNodeType) FetchDatabaseListFromComputeNode() ([]string, error) {
+	sql := fmt.Sprintf("select datname from pg_catalog.pg_database where datistemplate=false")
+	rows, err := r.PgConn.Query(sql)
+	if err != nil {
+		return nil, err
+	}
+	dbnameVec := make([]string, 0)
+	for rows.Next() {
+		var db string
+		err := rows.Scan(&db)
+		if err != nil {
+			return nil, err
+		}
+		dbnameVec = append(dbnameVec, db)
+	}
+	return dbnameVec, nil
+}
+func (r *RestoreComputeNodeType) InsertShardRemapInstructor(shardMap string) error {
+	var lastTxnIdFromDDLlog string
+	fetchLastTxnIdSql :=
+		fmt.Sprintf("select txn from ddl_ops_log_%s order by id desc limit 1", r.ClusterName)
+	rows, err := r.metaConn.Query(fetchLastTxnIdSql)
+	if err != nil {
+		return err
+	}
+	err = rows.Scan(&lastTxnIdFromDDLlog)
+	if err != nil {
+		return err
+	}
+	dbvec, err := r.FetchDatabaseListFromComputeNode()
+	if err != nil {
+		return err
+	}
+	for _, dbname := range dbvec {
+		sqlbuf := fmt.Sprintf(
+			"INSERT INTO kunlun_metadata_db.ddl_ops_log_%s "+
+				"(objname, "+
+				"db_name, "+
+				"schema_name, "+
+				"user_name, "+
+				"role_name, "+
+				"search_path, "+
+				"optype, "+
+				"objtype, "+
+				"sql_src, "+
+				"sql_storage_node, "+
+				"target_shard_id, "+
+				"initiator, "+
+				"txn_id) "+
+				"VALUES      "+
+				"('', "+
+				"'%s', "+
+				"'postgres', "+
+				"'postgres', "+
+				"'none', "+
+				"'\"$user\", public', "+
+				"'remap_shardid', "+
+				"'others', "+
+				"'%s', "+
+				"'', "+
+				"0, "+
+				"0, "+
+				"'%s');",
+			dbname, r.ClusterName, configParse.ShardMap, lastTxnIdFromDDLlog)
 
+		_, err = r.metaConn.Exec(sqlbuf)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func (r *RestoreComputeNodeType) RestoreComputeNode(args *configParse.RestoreUtilArguments) error {
 	var err error
 	err = r.parseBinaryDir(args)
@@ -420,6 +492,11 @@ func (r *RestoreComputeNodeType) RestoreComputeNode(args *configParse.RestoreUti
 	*/
 	// do pg_restore
 	err = r.restoreDumpedFile(args)
+	if err != nil {
+		return err
+	}
+	// Insert Shard ID remap instruction
+	err = r.InsertShardRemapInstructor(configParse.ShardMap)
 	if err != nil {
 		return err
 	}

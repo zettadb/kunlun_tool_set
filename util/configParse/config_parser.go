@@ -39,6 +39,7 @@ var RestoreBaseDir string
 var BackupBaseDir string
 var HdfsBaseDir = "/kunlun/backup"
 var HdfsNameNode string
+var ShardMap string
 
 type tomlConfig struct {
 	Title   string
@@ -198,6 +199,7 @@ the tool will determine the etcfile path`)
 	}
 
 	HdfsNameNode = *hdfsnamenode
+
 	etcPath, err := getMysqlEtcFileByPortOrProvided(*port, *etcFile)
 	if err != nil {
 		return err
@@ -254,7 +256,8 @@ func ParseArgRestore() error {
 	origShardName := flag.String("origshardname", "", "source shard name to be restored")
 	origMetaClusterConnStr := flag.String("origmetaclusterconnstr", "", "orig meta cluster connection string e.g. user:pass@(ip:port)/mysql")
 	metaClusterConnStr := flag.String("metaclusterconnstr", "", "current meta cluster connection string e.g. user:pass@(ip:port)/mysql")
-	hdfsnamenode := flag.String("HdfsNameNodeService", "", "specify the hdfs name node service, hdfs://ip:port")
+	hdfsNameNode := flag.String("HdfsNameNodeService", "", "specify the hdfs name node service, hdfs://ip:port")
+	ShardIdMap := flag.String("shard_map", "", "Shard ID mapping relations for new Cluster and original Cluster")
 
 	flag.Parse()
 
@@ -264,7 +267,13 @@ func ParseArgRestore() error {
 		return fmt.Errorf("arg parse error")
 	}
 
-	HdfsNameNode = *hdfsnamenode
+	HdfsNameNode = *hdfsNameNode
+	ShardMap = *ShardIdMap
+	if len(ShardMap) == 0 {
+		PrintRestoreIntro()
+		flag.PrintDefaults()
+		return fmt.Errorf("shard_map must be specified")
+	}
 
 	var etcFile string
 	var err error

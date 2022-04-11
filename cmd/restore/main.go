@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 	"zetta_util/util/configParse"
 	"zetta_util/util/logger"
 	"zetta_util/util/restoreUtil"
@@ -28,6 +27,7 @@ func main() {
 		restoreCompute := &restoreUtil.RestoreComputeNodeType{}
 		err = restoreCompute.RestoreComputeNode(&configParse.RestoreUtilArgs)
 		if err != nil {
+			fmt.Println(err.Error())
 			logger.Log.Error(err.Error())
 			os.Exit(-1)
 		}
@@ -38,14 +38,14 @@ func main() {
 	restoreColdback := restoreUtil.NewDoRestoreColdbackType()
 	err = restoreColdback.ApplyColdBack()
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println(err.Error())
 		os.Exit(-1)
 	}
 
 	fmt.Println("restore xtrabackup successfully")
 	logger.Log.Info("restore xtrabackup successfully")
 
-	time.Sleep(time.Second * 2)
+	//time.Sleep(time.Second * 2)
 	//restoreFastApplyBinlog := restoreUtil.NewDoFastApplyBinlogType()
 	//if restoreFastApplyBinlog == nil {
 	//	fmt.Println("restore fastApplyBinlog failed")
@@ -54,7 +54,7 @@ func main() {
 
 	//err = restoreFastApplyBinlog.ApplyFastBinlogApply()
 	//if err != nil {
-	//	fmt.Println(err)
+	//	fmt.Println(err.Error())
 	//	os.Exit(-1)
 	//}
 
