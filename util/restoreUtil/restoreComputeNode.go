@@ -224,6 +224,7 @@ type ddlLogType struct {
 	sqlStorageNode sql.NullString
 	targetShardId  sql.NullInt16
 	initiator      sql.NullInt16
+	txnId          sql.NullString
 }
 
 func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArguments) error {
@@ -253,7 +254,8 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 			&ddlRow.sqlSrc,
 			&ddlRow.sqlStorageNode,
 			&ddlRow.targetShardId,
-			&ddlRow.initiator)
+			&ddlRow.initiator,
+			&ddlRow.txnId)
 		if err != nil {
 			logger.Log.Error(fmt.Sprintf("row scan error %s", err.Error()))
 			return err
@@ -280,8 +282,9 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 		sqlstorage_str := fmt.Sprintf("%s", sqlstorage)
 		targetshardid, _ := rowEntry.targetShardId.Value()
 		//initiator, _ := rowEntry.initiator.Value()
+		txnId, _ := rowEntry.txnId.Value()
 		sql2 := fmt.Sprintf(
-			`replace into kunlun_metadata_db.%s 
+			`replace into kunlun_metadata_db.%s
 							set id = '%d', 
 							objname = '%s',
 							db_name = '%s',
@@ -295,7 +298,8 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 							sql_src = "%s",
 							sql_storage_node = "%s",
 							target_shard_id = '%d',
-							initiator = '1024'`,
+							initiator = '1024',
+							txn_id = '%s'`,
 			metaDDLLogTableName,
 			idValue,
 			objname,
@@ -309,7 +313,8 @@ func (r *RestoreComputeNodeType) copyBackDDLlog(args *configParse.RestoreUtilArg
 			whenlog,
 			strings.ReplaceAll(sqlsrc_str, "\"", "\\\""),
 			strings.ReplaceAll(sqlstorage_str, "\"", "\\\""),
-			targetshardid)
+			targetshardid,
+			txnId)
 		//initiator)
 		result, err = r.metaConn.Exec(sql2)
 		if err != nil {
@@ -395,20 +400,21 @@ func (r *RestoreComputeNodeType) FetchDatabaseListFromComputeNode() ([]string, e
 func (r *RestoreComputeNodeType) InsertShardRemapInstructor(shardMap string) error {
 	var lastTxnIdFromDDLlog string
 	fetchLastTxnIdSql :=
-		fmt.Sprintf("select txn from ddl_ops_log_%s order by id desc limit 1", r.ClusterName)
+		fmt.Sprintf("select txn_id from kunlun_metadata_db.ddl_ops_log_%s order by id desc limit 1", r.ClusterName)
 	rows, err := r.metaConn.Query(fetchLastTxnIdSql)
 	if err != nil {
 		return err
 	}
+	rows.Next()
 	err = rows.Scan(&lastTxnIdFromDDLlog)
 	if err != nil {
 		return err
 	}
-	dbvec, err := r.FetchDatabaseListFromComputeNode()
+	dbVec, err := r.FetchDatabaseListFromComputeNode()
 	if err != nil {
 		return err
 	}
-	for _, dbname := range dbvec {
+	for _, dbname := range dbVec {
 		sqlbuf := fmt.Sprintf(
 			"INSERT INTO kunlun_metadata_db.ddl_ops_log_%s "+
 				"(objname, "+
@@ -438,7 +444,7 @@ func (r *RestoreComputeNodeType) InsertShardRemapInstructor(shardMap string) err
 				"0, "+
 				"0, "+
 				"'%s');",
-			dbname, r.ClusterName, configParse.ShardMap, lastTxnIdFromDDLlog)
+			r.ClusterName, dbname, configParse.ShardMap, lastTxnIdFromDDLlog)
 
 		_, err = r.metaConn.Exec(sqlbuf)
 		if err != nil {

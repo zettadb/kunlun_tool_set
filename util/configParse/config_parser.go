@@ -269,7 +269,7 @@ func ParseArgRestore() error {
 
 	HdfsNameNode = *hdfsNameNode
 	ShardMap = *ShardIdMap
-	if len(ShardMap) == 0 {
+	if len(ShardMap) == 0 && *restoreType == "compute" {
 		PrintRestoreIntro()
 		flag.PrintDefaults()
 		return fmt.Errorf("shard_map must be specified")
